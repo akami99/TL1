@@ -32,6 +32,17 @@ LevelData* LevelLoader::LoadFile(const std::string& fileName) {
 
 	// 全オブジェクトを走査
 	for (const auto& object : deserialized["objects"]) {
+		assert(object.contains("type"));
+
+		// 無効フラグのチェック
+		if (object.contains("disabled")) {
+			bool disabled = object["disabled"].get<bool>();
+			if (disabled) {
+				// 配置しない（スキップ）
+				continue;
+			}
+		}
+
 		levelData->objects.emplace_back(LevelData::ObjectData{});
 		ParseObject(levelData->objects.back(), object);
 	}

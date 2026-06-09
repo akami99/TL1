@@ -13,6 +13,7 @@ from . import panel_file_name
 from . import op_add_collider
 from . import panel_collider
 from . import draw_collider
+from . import disabled
 
 # --- リロード ---
 # 2回目以降の読み込み（F8 や Reload Scripts）時にサブモジュールを強制再読み込み
@@ -28,6 +29,7 @@ if "metadata" in locals():
     importlib.reload(panel_collider)
     importlib.reload(menu_my_menu)
     importlib.reload(draw_collider)
+    importlib.reload(disabled)
     print("レベルエディタ: サブモジュールをリロードしました。")
 else:
     print("レベルエディタ: サブモジュールを初回インポートしました。")
@@ -48,6 +50,8 @@ classes = (
     panel_file_name.OBJECT_PT_file_name,
     op_add_collider.MYADDON_OT_add_collider,
     panel_collider.OBJECT_PT_collider,
+    disabled.MYADDON_OT_add_disabled,
+    disabled.OBJECT_PT_disabled,
 )
 
 #アドオン有効化時コールバック
