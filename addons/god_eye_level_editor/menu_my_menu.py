@@ -1,6 +1,4 @@
 import bpy
-# metadataファイルから安全にbl_infoをインポート
-from .metadata import bl_info
 
 # トップバーの拡張メニュー
 class TOPBAR_MT_my_menu(bpy.types.Menu):
@@ -8,8 +6,8 @@ class TOPBAR_MT_my_menu(bpy.types.Menu):
     bl_idname = "myaddon.topbar_mt_my_menu"
     # メニューのラベルとして表示される文字列
     bl_label = "MyMenu"
-    # 著者表示用の文字列
-    bl_description = "拡張メニュー by " + bl_info["author"]
+    # 著者表示用の文字列(__init__.pyで設定する)
+    bl_description = "" 
 
     # サブメニューの描画
     def draw(self, context):
