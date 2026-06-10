@@ -119,6 +119,51 @@ def _patch_exporter():
 _patch_exporter()
 
 
+# 汎用シンボルモデルインポート関数 (コンテキスト依存を避けるため直接呼び出せるように定義)
+def import_symbol_model(spawn_type):
+    if spawn_type not in SpawnNames.names:
+        return False
+
+    proto_name = SpawnNames.names[spawn_type][SpawnNames.PROTOTYPE]
+    file_rel_path = SpawnNames.names[spawn_type][SpawnNames.FILENAME]
+
+    # 重複ロード防止
+    if bpy.data.objects.get(proto_name) is not None:
+        return True
+
+    addon_dir = os.path.dirname(__file__)
+    obj_path = os.path.join(addon_dir, file_rel_path)
+
+    if not os.path.exists(obj_path):
+        print(f"Model not found: {obj_path}")
+        return False
+
+    old_objs = set(bpy.data.objects)
+    try:
+        try:
+            bpy.ops.wm.obj_import(filepath=obj_path)
+        except AttributeError:
+            bpy.ops.import_scene.obj(filepath=obj_path)
+    except Exception as e:
+        print(f"Failed to import model: {e}")
+        return False
+
+    new_objs = set(bpy.data.objects) - old_objs
+    if new_objs:
+        new_obj = list(new_objs)[0]
+        new_obj.name = proto_name
+        # メッシュ名も固定
+        new_obj.data.name = proto_name
+        
+        # プロトタイプオブジェクトはビューとレンダリングで非表示にする
+        new_obj.hide_viewport = True
+        new_obj.hide_render = True
+        return True
+    else:
+        print("Failed to import model (no objects created).")
+        return False
+
+
 # 汎用シンボルインポートオペレータ
 class MYADDON_OT_spawn_import_symbol(bpy.types.Operator):
     bl_idname = "myaddon.myaddon_ot_spawn_import_symbol"
@@ -129,44 +174,11 @@ class MYADDON_OT_spawn_import_symbol(bpy.types.Operator):
 
     def execute(self, context):
         t = self.type
-        if t not in SpawnNames.names:
-            return {"CANCELLED"}
-
-        proto_name = SpawnNames.names[t][SpawnNames.PROTOTYPE]
-        file_rel_path = SpawnNames.names[t][SpawnNames.FILENAME]
-
-        # 重複ロード防止
-        if bpy.data.objects.get(proto_name) is not None:
-            return {"CANCELLED"}
-
-        addon_dir = os.path.dirname(__file__)
-        obj_path = os.path.join(addon_dir, file_rel_path)
-
-        if not os.path.exists(obj_path):
-            self.report({"ERROR"}, f"Model not found: {obj_path}")
-            return {"CANCELLED"}
-
-        old_objs = set(bpy.data.objects)
-        try:
-            bpy.ops.wm.obj_import(filepath=obj_path)
-        except AttributeError:
-            bpy.ops.import_scene.obj(filepath=obj_path)
-
-        new_objs = set(bpy.data.objects) - old_objs
-        if new_objs:
-            new_obj = list(new_objs)[0]
-            new_obj.name = proto_name
-            # メッシュ名も固定
-            new_obj.data.name = proto_name
-            
-            # プロトタイプオブジェクトはビューとレンダリングで非表示にする
-            new_obj.hide_viewport = True
-            new_obj.hide_render = True
+        if import_symbol_model(t):
+            return {"FINISHED"}
         else:
-            self.report({"ERROR"}, "Failed to import model.")
+            self.report({"ERROR"}, f"Failed to import symbol model for {t}")
             return {"CANCELLED"}
-
-        return {"FINISHED"}
 
 
 # 汎用シンボル作成オペレータ

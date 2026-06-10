@@ -80,6 +80,10 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
                 if (object.parent):
                     continue
 
+                # プロトタイプオブジェクトはスキップ
+                if object.name.startswith("Prototype"):
+                    continue
+
                 # シーン直下のオブジェクトをルートノード(深さ0)とし、再帰関数で走査
                 self.parse_scene_recursive(file, object, 0)
 
@@ -152,6 +156,10 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         for object in bpy.context.scene.objects:
             # 親オブジェクトがあるものはスキップ (代わりに親から呼び出すから)
             if (object.parent):
+                continue
+            
+            # プロトタイプオブジェクトはスキップ
+            if object.name.startswith("Prototype"):
                 continue
             
             # シーン直下のオブジェクトをルートノード(深さ0)とし、再帰関数で走査

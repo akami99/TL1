@@ -4,6 +4,7 @@ import importlib
 from . import op_stretch_vertex
 from . import op_create_ico_sphere
 from . import op_export_scene
+from . import op_import_scene
 from . import menu_my_menu
 from . import op_add_filename
 from . import panel_file_name
@@ -18,6 +19,7 @@ if "op_stretch_vertex" in locals():
     importlib.reload(op_stretch_vertex)
     importlib.reload(op_create_ico_sphere)
     importlib.reload(op_export_scene)
+    importlib.reload(op_import_scene)
     importlib.reload(op_add_filename)
     importlib.reload(op_add_collider)
     importlib.reload(panel_file_name)
@@ -49,6 +51,7 @@ classes = (
     op_stretch_vertex.MYADDON_OT_stretch_vertex,
     op_create_ico_sphere.MYADDON_OT_create_ico_sphere,
     op_export_scene.MYADDON_OT_export_scene,
+    op_import_scene.MYADDON_OT_import_scene,
     menu_my_menu.TOPBAR_MT_my_menu,
     op_add_filename.MYADDON_OT_add_filename,
     panel_file_name.OBJECT_PT_file_name,

@@ -15,6 +15,7 @@ class TOPBAR_MT_my_menu(bpy.types.Menu):
         self.layout.operator("myaddon.myaddon_ot_stretch_vertex", text="頂点を伸ばす")
         self.layout.operator("myaddon.myaddon_ot_create_object", text="ICO球生成")
         self.layout.separator()
+        self.layout.operator("myaddon.myaddon_ot_import_scene", text="シーン入力")
         self.layout.operator("myaddon.myaddon_ot_export_scene", text="シーン出力")
         self.layout.operator("myaddon.myaddon_ot_spawn_create_enemy_symbol", text="敵出現ポイントシンボルの作成")
         self.layout.operator("myaddon.myaddon_ot_spawn_create_player_symbol", text="プレイヤー出現ポイントシンボルの作成")
