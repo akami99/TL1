@@ -44,6 +44,17 @@ LevelData* LevelLoader::LoadFile(const std::string& fileName) {
 				levelData->players.back().rotation = temp.rotation;
 				continue;
 			}
+			else if (spawnType == "ENEMY") {
+				levelData->enemies.emplace_back(LevelData::EnemySpawnData{});
+				LevelData::ObjectData temp{};
+				ParseObject(temp, object);
+				levelData->enemies.back().translation = temp.translation;
+				levelData->enemies.back().rotation = temp.rotation;
+				if (object.contains("file_name")) {
+					levelData->enemies.back().fileName = object["file_name"].get<std::string>();
+				}
+				continue;
+			}
 		}
 
 		levelData->objects.emplace_back(LevelData::ObjectData{});
@@ -63,14 +74,14 @@ void LevelLoader::ParseObject(LevelData::ObjectData& objectData, const nlohmann:
 
 	const auto& transform = jsonObject["transform"];
 
-	objectData.translation.x = (float)transform["translation"][0];
+	objectData.translation.x = -(float)transform["translation"][0];
 	objectData.translation.y = (float)transform["translation"][2];
 	objectData.translation.z = -(float)transform["translation"][1];
 
 	float toRad = 3.1415926535f / 180.0f;
-	objectData.rotation.x = (float)transform["rotation"][0] * toRad;
+	objectData.rotation.x = -(float)transform["rotation"][0] * toRad;
 	objectData.rotation.y = -(float)transform["rotation"][2] * toRad;
-	objectData.rotation.z = -(float)transform["rotation"][1] * toRad;
+	objectData.rotation.z = (float)transform["rotation"][1] * toRad;
 
 	objectData.scaling.x = (float)transform["scaling"][0];
 	objectData.scaling.y = (float)transform["scaling"][2];

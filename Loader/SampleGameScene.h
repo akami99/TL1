@@ -16,6 +16,7 @@ public:
 private:
 	void CreateObjects(const std::vector<LevelData::ObjectData>& data);
 	void CreatePlayerSpawns(const std::vector<LevelData::PlayerSpawnData>& data);
+	void CreateEnemySpawns(const std::vector<LevelData::EnemySpawnData>& data);
 
 private:
 	std::unique_ptr<LevelData> levelData_;

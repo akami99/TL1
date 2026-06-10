@@ -11,7 +11,7 @@ from . import op_add_collider
 from . import panel_collider
 from . import draw_collider
 from . import disabled
-from . import player_spawn
+from . import spawn
 
 # update exporter to support new custom properties
 if "op_stretch_vertex" in locals():
@@ -25,7 +25,7 @@ if "op_stretch_vertex" in locals():
     importlib.reload(menu_my_menu)
     importlib.reload(draw_collider)
     importlib.reload(disabled)
-    importlib.reload(player_spawn)
+    importlib.reload(spawn)
     print("レベルエディタ: サブモジュールをリロードしました")
 else:
     print("レベルエディタ: サブモジュールを初回インポートしました")
@@ -56,8 +56,11 @@ classes = (
     panel_collider.OBJECT_PT_collider,
     disabled.MYADDON_OT_add_disabled,
     disabled.OBJECT_PT_disabled,
-    player_spawn.MYADDON_OT_add_player_spawn,
-    player_spawn.OBJECT_PT_player_spawn,
+    spawn.MYADDON_OT_spawn_import_symbol,
+    spawn.MYADDON_OT_spawn_create_symbol,
+    spawn.MYADDON_OT_spawn_create_player_symbol,
+    spawn.MYADDON_OT_spawn_create_enemy_symbol,
+    spawn.OBJECT_PT_spawn,
 )
 
 

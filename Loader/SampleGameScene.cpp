@@ -9,6 +9,7 @@ void SampleGameScene::Initialize() {
 
 	CreateObjects(levelData_->objects);
 	CreatePlayerSpawns(levelData_->players);
+	CreateEnemySpawns(levelData_->enemies);
 }
 
 void SampleGameScene::CreateObjects(const std::vector<LevelData::ObjectData>& data) {
@@ -41,6 +42,18 @@ void SampleGameScene::CreatePlayerSpawns(const std::vector<LevelData::PlayerSpaw
 		// Make it a little smaller so the marker is easy to distinguish.
 		marker->SetScale({ 0.25f, 0.25f, 0.25f });
 
+		playerSpawnObjects_.push_back(std::move(marker));
+	}
+}
+
+void SampleGameScene::CreateEnemySpawns(const std::vector<LevelData::EnemySpawnData>& data) {
+	for (const auto& spawnData : data) {
+		std::unique_ptr<Object3d> marker = std::make_unique<Object3d>();
+		marker->Initialize();
+		marker->SetModel("sphere");
+		marker->SetTranslate(spawnData.translation);
+		marker->SetRotation(spawnData.rotation);
+		marker->SetScale({ 0.2f, 0.2f, 0.2f });
 		playerSpawnObjects_.push_back(std::move(marker));
 	}
 }
