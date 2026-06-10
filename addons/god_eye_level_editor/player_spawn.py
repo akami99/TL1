@@ -1,11 +1,8 @@
 import bpy
 import math
+import os
 
 from . import op_export_scene
-
-
-def _is_player_spawn_object(obj):
-    return "player_spawn" in obj and bool(obj["player_spawn"])
 
 
 def _patch_exporter():
@@ -18,8 +15,7 @@ def _patch_exporter():
         for _ in range(level):
             indent += "\t"
 
-        obj_type = "PlayerSpawn" if _is_player_spawn_object(object) else object.type
-        self.write_and_print(file, indent + obj_type)
+        self.write_and_print(file, indent + object.type)
 
         trans, rot, scale = object.matrix_local.decompose()
         rot = rot.to_euler()
@@ -31,6 +27,9 @@ def _patch_exporter():
         self.write_and_print(file, indent + "T %f %f %f" % (trans.x, trans.y, trans.z))
         self.write_and_print(file, indent + "R %f %f %f" % (rot.x, rot.y, rot.z))
         self.write_and_print(file, indent + "S %f %f %f" % (scale.x, scale.y, scale.z))
+
+        if "spawn" in object:
+            self.write_and_print(file, indent + "SPAWN %s" % object["spawn"])
 
         if "file_name" in object:
             self.write_and_print(file, indent + "N %s" % object["file_name"])
@@ -61,8 +60,7 @@ def _patch_exporter():
     def parse_scene_recursive_json(self, data_parent, object, level):
         json_object = dict()
 
-        # PlayerSpawn を持つオブジェクトは type を差し替える
-        json_object["type"] = "PlayerSpawn" if _is_player_spawn_object(object) else object.type
+        json_object["type"] = object.type
         json_object["name"] = object.name
 
         trans, rot, scale = object.matrix_local.decompose()
@@ -80,6 +78,9 @@ def _patch_exporter():
 
         if "disabled" in object:
             json_object["disabled"] = object["disabled"]
+
+        if "spawn" in object:
+            json_object["spawn"] = object["spawn"]
 
         if "file_name" in object:
             json_object["file_name"] = object["file_name"]
@@ -108,16 +109,62 @@ _patch_exporter()
 
 class MYADDON_OT_add_player_spawn(bpy.types.Operator):
     bl_idname = "myaddon.myaddon_ot_add_player_spawn"
-    bl_label = "Add Player Spawn"
-    bl_description = "Add player spawn custom property"
+    bl_label = "出現ポイントシンボルの作成"
+    bl_description = "Add player spawn point symbol"
     bl_options = {"REGISTER", "UNDO"}
 
+    create_new: bpy.props.BoolProperty(
+        name="Create New Symbol",
+        description="Create a new symbol object from player.obj instead of modifying selected object",
+        default=True,
+    )
+
     def execute(self, context):
-        if context.object is None:
+        if not self.create_new:
+            if context.object is None:
+                return {"CANCELLED"}
+            context.object["spawn"] = "PLAYER"
+            print("'spawn' カスタムプロパティを追加しました")
+            return {"FINISHED"}
+
+        addon_dir = os.path.dirname(__file__)
+        obj_path = os.path.join(addon_dir, "player", "player.obj")
+
+        if not os.path.exists(obj_path):
+            self.report({"ERROR"}, f"Player model not found: {obj_path}")
             return {"CANCELLED"}
 
-        context.object["player_spawn"] = True
-        print("'player_spawn' カスタムプロパティを追加しました")
+        mesh_name = "player"
+        player_mesh = bpy.data.meshes.get(mesh_name)
+
+        if player_mesh is None:
+            old_objs = set(bpy.data.objects)
+            try:
+                bpy.ops.wm.obj_import(filepath=obj_path)
+            except AttributeError:
+                bpy.ops.import_scene.obj(filepath=obj_path)
+
+            new_objs = set(bpy.data.objects) - old_objs
+            if new_objs:
+                new_obj = list(new_objs)[0]
+                player_mesh = new_obj.data
+                player_mesh.name = mesh_name
+            else:
+                self.report({"ERROR"}, "Failed to import player model.")
+                return {"CANCELLED"}
+        else:
+            new_obj = bpy.data.objects.new(name="player", object_data=player_mesh)
+            context.collection.objects.link(new_obj)
+
+        bpy.ops.object.select_all(action="DESELECT")
+        new_obj.select_set(True)
+        context.view_layer.objects.active = new_obj
+
+        new_obj["spawn"] = "PLAYER"
+        new_obj.location = context.scene.cursor.location
+        new_obj.rotation_euler = (math.radians(90.0), 0.0, math.radians(180.0))
+
+        print("出現ポイントシンボルを作成しました")
         return {"FINISHED"}
 
 
@@ -125,7 +172,7 @@ class OBJECT_PT_player_spawn(bpy.types.Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "object"
-    bl_label = "Player Spawn"
+    bl_label = "Spawn"
 
     def draw(self, context):
         layout = self.layout
@@ -134,7 +181,10 @@ class OBJECT_PT_player_spawn(bpy.types.Panel):
         if obj is None:
             return
 
-        if "player_spawn" in obj:
-            layout.prop(obj, '["player_spawn"]', text="Player Spawn")
+        if "spawn" in obj:
+            layout.prop(obj, '["spawn"]', text="Spawn")
         else:
-            layout.operator("myaddon.myaddon_ot_add_player_spawn")
+            op = layout.operator("myaddon.myaddon_ot_add_player_spawn", text="Add Spawn")
+            op.create_new = False
+
+

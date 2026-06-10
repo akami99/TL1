@@ -34,14 +34,16 @@ LevelData* LevelLoader::LoadFile(const std::string& fileName) {
 			}
 		}
 
-		const std::string type = object["type"].get<std::string>();
-		if (type == "PlayerSpawn") {
-			levelData->players.emplace_back(LevelData::PlayerSpawnData{});
-			LevelData::ObjectData temp{};
-			ParseObject(temp, object);
-			levelData->players.back().translation = temp.translation;
-			levelData->players.back().rotation = temp.rotation;
-			continue;
+		if (object.contains("spawn")) {
+			const std::string spawnType = object["spawn"].get<std::string>();
+			if (spawnType == "PLAYER") {
+				levelData->players.emplace_back(LevelData::PlayerSpawnData{});
+				LevelData::ObjectData temp{};
+				ParseObject(temp, object);
+				levelData->players.back().translation = temp.translation;
+				levelData->players.back().rotation = temp.rotation;
+				continue;
+			}
 		}
 
 		levelData->objects.emplace_back(LevelData::ObjectData{});
@@ -63,10 +65,10 @@ void LevelLoader::ParseObject(LevelData::ObjectData& objectData, const nlohmann:
 
 	objectData.translation.x = (float)transform["translation"][0];
 	objectData.translation.y = (float)transform["translation"][2];
-	objectData.translation.z = (float)transform["translation"][1];
+	objectData.translation.z = -(float)transform["translation"][1];
 
 	float toRad = 3.1415926535f / 180.0f;
-	objectData.rotation.x = -(float)transform["rotation"][0] * toRad;
+	objectData.rotation.x = (float)transform["rotation"][0] * toRad;
 	objectData.rotation.y = -(float)transform["rotation"][2] * toRad;
 	objectData.rotation.z = -(float)transform["rotation"][1] * toRad;
 
