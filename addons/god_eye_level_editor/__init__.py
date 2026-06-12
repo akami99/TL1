@@ -11,8 +11,10 @@ from . import panel_file_name
 from . import op_add_collider
 from . import panel_collider
 from . import draw_collider
+from . import draw_heatmap
 from . import disabled
 from . import spawn
+from . import panel_godeye
 
 # update exporter to support new custom properties
 if "op_stretch_vertex" in locals():
@@ -26,8 +28,10 @@ if "op_stretch_vertex" in locals():
     importlib.reload(panel_collider)
     importlib.reload(menu_my_menu)
     importlib.reload(draw_collider)
+    importlib.reload(draw_heatmap)
     importlib.reload(disabled)
     importlib.reload(spawn)
+    importlib.reload(panel_godeye)
     print("レベルエディタ: サブモジュールをリロードしました")
 else:
     print("レベルエディタ: サブモジュールを初回インポートしました")
@@ -64,6 +68,8 @@ classes = (
     spawn.MYADDON_OT_spawn_create_player_symbol,
     spawn.MYADDON_OT_spawn_create_enemy_symbol,
     spawn.OBJECT_PT_spawn,
+    panel_godeye.OBJECT_PT_godeye_main,
+    panel_godeye.MYADDON_OT_add_area,
 )
 
 
@@ -72,25 +78,57 @@ def register():
     author_name = bl_info.get("author", "Ren Akamine")
     menu_my_menu.TOPBAR_MT_my_menu.bl_description = "拡張メニュー by " + author_name
 
+    # 基準レール用プロパティの登録 (カーブオブジェクトのみ許可)
+    bpy.types.Scene.godeye_rail_curve = bpy.props.PointerProperty(
+        type=bpy.types.Object,
+        name="基準レール",
+        poll=lambda self, obj: obj.type == 'CURVE'
+    )
+    
+    # 視覚効果のON/OFFプロパティの登録
+    bpy.types.Scene.godeye_show_heatmap = bpy.props.BoolProperty(
+        name="ヒートマップ表示",
+        default=True
+    )
+    bpy.types.Scene.godeye_show_survival = bpy.props.BoolProperty(
+        name="生存ライン表示",
+        default=True
+    )
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
     bpy.types.TOPBAR_MT_editor_menus.append(menu_my_menu.TOPBAR_MT_my_menu.submenu)
+    
+    # コライダーの枠線描画ハンドラ
     draw_collider.DrawCollider.handle = bpy.types.SpaceView3D.draw_handler_add(
         draw_collider.DrawCollider.draw_collider,
         (),
         "WINDOW",
         "POST_VIEW",
     )
+    
+    # ヒートマップ描画 & 双方向同期ハンドラの登録
+    draw_heatmap.register_handlers()
+    
     print("レベルエディタが有効化されました")
 
 
 def unregister():
+    # ヒートマップ描画 & 双方向同期ハンドラの解除
+    draw_heatmap.unregister_handlers()
+
     bpy.types.TOPBAR_MT_editor_menus.remove(menu_my_menu.TOPBAR_MT_my_menu.submenu)
     bpy.types.SpaceView3D.draw_handler_remove(draw_collider.DrawCollider.handle, "WINDOW")
 
     for cls in classes:
         bpy.utils.unregister_class(cls)
+        
+    # プロパティの削除
+    del bpy.types.Scene.godeye_rail_curve
+    del bpy.types.Scene.godeye_show_heatmap
+    del bpy.types.Scene.godeye_show_survival
+    
     print("レベルエディタが無効化されました")
 
 

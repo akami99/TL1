@@ -44,6 +44,18 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         if "file_name" in object:
             self.write_and_print(file, indent + "N %s" % object["file_name"])
 
+        # カスタムプロパティ'spawn'
+        if "spawn" in object:
+            self.write_and_print(file, indent + "SPAWN %s" % object["spawn"])
+
+        # カスタムプロパティ'distance'
+        if "distance" in object:
+            self.write_and_print(file, indent + "D %f" % object["distance"])
+
+        # カスタムプロパティ'area'
+        if "area" in object:
+            self.write_and_print(file, indent + "A %d" % object["area"])
+
         # カスタムプロパティ'collider'
         if "collider" in object:
             self.write_and_print(file, indent + "C %s" % object["collider"])
@@ -121,6 +133,49 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         # カスタムプロパティ'file_name'
         if "file_name" in object:
             json_object["file_name"] = object["file_name"]
+
+        # カスタムプロパティ'spawn'
+        if "spawn" in object:
+            json_object["spawn"] = object["spawn"]
+
+        # カスタムプロパティ'distance'
+        if "distance" in object:
+            json_object["distance"] = object["distance"]
+
+        # カスタムプロパティ'area'
+        if "area" in object:
+            json_object["area"] = object["area"]
+
+        # カーブデータのエクスポート
+        if object.type == 'CURVE':
+            curve_data = object.data
+            json_object["curve"] = dict()
+            json_object["curve"]["dimensions"] = curve_data.dimensions
+            json_object["curve"]["splines"] = list()
+            
+            for spline in curve_data.splines:
+                spline_data = dict()
+                spline_data["type"] = spline.type
+                spline_data["use_cyclic_u"] = spline.use_cyclic_u
+                
+                if spline.type == 'BEZIER':
+                    points_list = []
+                    for bp in spline.bezier_points:
+                        pt = dict()
+                        pt["co"] = (bp.co.x, bp.co.y, bp.co.z)
+                        pt["handle_left"] = (bp.handle_left.x, bp.handle_left.y, bp.handle_left.z)
+                        pt["handle_right"] = (bp.handle_right.x, bp.handle_right.y, bp.handle_right.z)
+                        pt["handle_left_type"] = bp.handle_left_type
+                        pt["handle_right_type"] = bp.handle_right_type
+                        points_list.append(pt)
+                    spline_data["bezier_points"] = points_list
+                else:
+                    points_list = []
+                    for p in spline.points:
+                        points_list.append((p.co.x, p.co.y, p.co.z, p.co.w))
+                    spline_data["points"] = points_list
+                    
+                json_object["curve"]["splines"].append(spline_data)
 
         # カスタムプロパティ'collider'
         if "collider" in object:

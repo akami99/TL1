@@ -130,13 +130,48 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                     new_obj = context.active_object
                     new_obj.name = obj_name
 
-            # 3. それ以外（MESHや一般的なメッシュ等）
+            # 3. それ以外（MESH、CURVE、一般的なオブジェクト等）
             if new_obj is None:
                 if obj_type == "MESH":
                     bpy.ops.object.select_all(action='DESELECT')
                     bpy.ops.mesh.primitive_cube_add(size=1.0)
                     new_obj = context.active_object
                     new_obj.name = obj_name
+                elif obj_type == "CURVE":
+                    # 新規カーブデータブロックの作成とオブジェクト化
+                    curve_data = bpy.data.curves.new(name=obj_name, type='CURVE')
+                    new_obj = bpy.data.objects.new(name=obj_name, object_data=curve_data)
+                    context.collection.objects.link(new_obj)
+                    
+                    # カーブ幾何データの復元
+                    if "curve" in obj_data:
+                        c_data = obj_data["curve"]
+                        curve_data.dimensions = c_data.get("dimensions", '3D')
+                        
+                        for spline_data in c_data.get("splines", []):
+                            s_type = spline_data.get("type", 'BEZIER')
+                            spline = curve_data.splines.new(type=s_type)
+                            spline.use_cyclic_u = spline_data.get("use_cyclic_u", False)
+                            
+                            if s_type == 'BEZIER':
+                                bp_list = spline_data.get("bezier_points", [])
+                                # spline作成時にすでにデフォルトで1点あるので、追加分を確保
+                                spline.bezier_points.add(len(bp_list) - 1)
+                                
+                                for idx, pt in enumerate(bp_list):
+                                    bp = spline.bezier_points[idx]
+                                    bp.co = pt["co"]
+                                    bp.handle_left = pt["handle_left"]
+                                    bp.handle_right = pt["handle_right"]
+                                    bp.handle_left_type = pt.get("handle_left_type", 'FREE')
+                                    bp.handle_right_type = pt.get("handle_right_type", 'FREE')
+                            else:
+                                p_list = spline_data.get("points", [])
+                                spline.points.add(len(p_list) - 1)
+                                
+                                for idx, co_w in enumerate(p_list):
+                                    p = spline.points[idx]
+                                    p.co = co_w
                 else:
                     # 空のオブジェクト
                     new_obj = bpy.data.objects.new(name=obj_name, object_data=None)
@@ -161,6 +196,12 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
             if "file_name" in obj_data:
                 new_obj["file_name"] = obj_data["file_name"]
 
+            if "distance" in obj_data:
+                new_obj["distance"] = obj_data["distance"]
+
+            if "area" in obj_data:
+                new_obj["area"] = obj_data["area"]
+
             if "collider" in obj_data:
                 coll_data = obj_data["collider"]
                 new_obj["collider"] = coll_data.get("type", "BOX")
@@ -175,6 +216,11 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
         # 全てのオブジェクトを再帰的に生成
         for obj_data in data.get("objects", []):
             create_object_recursive(obj_data)
+
+        # インポート完了後にキャッシュを強制再構築し、バウンディングボックスの評価を更新
+        if context.scene.godeye_rail_curve:
+            from .draw_heatmap import update_curve_cache
+            update_curve_cache(context.scene.godeye_rail_curve)
 
         self.report({'INFO'}, "シーン情報をImportしました")
         return {'FINISHED'}
