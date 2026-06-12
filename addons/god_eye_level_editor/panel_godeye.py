@@ -13,7 +13,9 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         # --- ① レール設定 (Setup) ---
         box_setup = layout.box()
         box_setup.label(text="① レール設定 (Setup)", icon='PARTICLE_PATH')
-        box_setup.prop(scene, "godeye_rail_curve", text="")
+        row_rail = box_setup.row(align=True)
+        row_rail.prop(scene, "godeye_rail_curve", text="")
+        row_rail.operator("myaddon.myaddon_ot_create_rail", text="作成", icon='ADD')
 
         rail_obj = scene.godeye_rail_curve
         if not rail_obj:
@@ -47,6 +49,8 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
                 except Exception as e:
                     print(f"Failed to update property UI limits: {e}")
                 box_editor.prop(active_obj, '["distance"]', text="出現位置 (m)", slider=True)
+            else:
+                box_editor.operator("myaddon.myaddon_ot_add_distance", text="出現位置を追加", icon='ADD')
                 
             # areaプロパティ (エリア番号、タイムクライシス等のロック戦闘エリアをサポート)
             if "area" in active_obj:
@@ -87,10 +91,21 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         box_vis.label(text="③ 視覚効果 (Visualization)", icon='RESTRICT_VIEW_OFF')
         box_vis.prop(scene, "godeye_show_heatmap", text="ヒートマップを表示")
         box_vis.prop(scene, "godeye_show_survival", text="生存ラインを表示")
+        box_vis.prop(scene, "godeye_show_fov", text="プレイヤー視野（FOV）を表示")
 
-        # --- ④ データ出力 (Export) ---
+        # --- ④ テスト走行シミュレータ (Simulation) ---
+        box_sim = layout.box()
+        box_sim.label(text="④ テスト走行シミュレータ (Simulation)", icon='PLAY')
+        try:
+            ui_api = scene.id_properties_ui("godeye_test_run_dist")
+            ui_api.update(min=0.0, max=total_dist, description="シミュレータ上の走行位置（m）")
+        except Exception as e:
+            pass
+        box_sim.prop(scene, "godeye_test_run_dist", text="走行位置 (m)", slider=True)
+
+        # --- ⑤ データ出力 (Export) ---
         box_export = layout.box()
-        box_export.label(text="④ データ出力 (Export)", icon='EXPORT')
+        box_export.label(text="⑤ データ出力 (Export)", icon='EXPORT')
         box_export.operator("myaddon.myaddon_ot_export_scene", text="エクスポート")
 
 
@@ -103,4 +118,38 @@ class MYADDON_OT_add_area(bpy.types.Operator):
     def execute(self, context):
         if context.active_object:
             context.active_object["area"] = 1
+        return {"FINISHED"}
+
+
+class MYADDON_OT_create_rail(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_create_rail"
+    bl_label = "基準レールの作成"
+    bl_description = "ベジェ曲線を生成し、太さを適用して基準レールに設定します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        bpy.ops.curve.primitive_bezier_curve_add(enter_editmode=False, align='WORLD', location=(0, 0, 0))
+        rail = context.active_object
+        rail.name = "EventRail"
+        rail.data.name = "EventRailCurve"
+        rail.data.dimensions = '3D'
+        rail.data.bevel_depth = 0.2
+
+        context.scene.godeye_rail_curve = rail
+
+        from .draw_heatmap import trigger_cache_update
+        trigger_cache_update(rail)
+
+        return {"FINISHED"}
+
+
+class MYADDON_OT_add_distance(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_add_distance"
+    bl_label = "出現位置プロパティを追加"
+    bl_description = "オブジェクトに出現位置プロパティを追加します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        if context.active_object:
+            context.active_object["distance"] = 0.0
         return {"FINISHED"}

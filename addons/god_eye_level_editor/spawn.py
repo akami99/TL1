@@ -125,6 +125,7 @@ class MYADDON_OT_spawn_create_symbol(bpy.types.Operator):
         new_obj["spawn"] = spawn_val
         new_obj["file_name"] = file_rel_path
         new_obj["area"] = 1
+        new_obj["distance"] = 0.0
         
         # 位置と回転の設定
         new_obj.location = context.scene.cursor.location

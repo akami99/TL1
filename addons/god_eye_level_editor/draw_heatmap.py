@@ -156,6 +156,39 @@ def trigger_cache_update(rail_obj):
     bpy.app.timers.register(timer_callback)
 
 
+_autosave_timer_pending = False
+
+def trigger_auto_export(scene):
+    """デバウンスを挟んで自動的にJSONをエクスポートする"""
+    global _autosave_timer_pending
+    if _autosave_timer_pending:
+        return
+    _autosave_timer_pending = True
+    
+    def autosave_callback():
+        global _autosave_timer_pending
+        try:
+            path = scene.get("godeye_last_export_path")
+            if path:
+                global _updating_godeye
+                if not _updating_godeye:
+                    _updating_godeye = True
+                    try:
+                        import os
+                        if os.path.exists(os.path.dirname(path)):
+                            bpy.ops.myaddon.myaddon_ot_export_scene('EXEC_DEFAULT', filepath=path)
+                            print(f"[God Eye] Hot-reload: Auto-exported to {path}")
+                    finally:
+                        _updating_godeye = False
+        except Exception as e:
+            print(f"Auto-export failed: {e}")
+        finally:
+            _autosave_timer_pending = False
+        return None  # 1回のみ実行
+        
+    bpy.app.timers.register(autosave_callback, first_interval=0.5)
+
+
 def godeye_depsgraph_update_handler(scene, depsgraph):
     """同期およびキャッシュ管理ハンドラ"""
     global _updating_godeye, _prev_locations, _prev_distances, _curve_cache
@@ -197,6 +230,10 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     _updating_godeye = True
     try:
         for obj in active_objs:
+            # PLAYERのみ位置とdistanceを同期し、ENEMYなどは同期しない
+            if obj.get("spawn") != "PLAYER":
+                continue
+
             curr_loc = tuple(obj.location)
             prev_loc = _prev_locations.get(obj.name)
             
@@ -232,6 +269,18 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     finally:
         _updating_godeye = False
 
+    # 4. 自動エクスポート（ホットリロード）の判定
+    if not _updating_godeye and scene.get("godeye_last_export_path"):
+        should_autosave = False
+        for update in depsgraph.updates:
+            if isinstance(update.id, bpy.types.Object):
+                obj = update.id
+                if "spawn" in obj or obj == scene.godeye_rail_curve:
+                    should_autosave = True
+                    break
+        if should_autosave:
+            trigger_auto_export(scene)
+
 
 def draw_heatmap_callback():
     """3Dビューポートへのヒートマップおよび生存ラインの描画処理 (キャッシュを参照し安全に描画)"""
@@ -263,6 +312,7 @@ def draw_heatmap_callback():
         shader = gpu.shader.from_builtin('POLYLINE_FLAT_COLOR')
         
     gpu.state.blend_set('ALPHA')
+    gpu.state.depth_test_set('NONE') # 最前面に描画
     
     try:
         gpu.state.line_width_set(4.0)
@@ -338,6 +388,95 @@ def draw_heatmap_callback():
                 )
                 shader.bind()
                 batch_line.draw(shader)
+
+    # ----------------------------------------------------
+    # 3. プレイヤー視野（FOV）の描画
+    # ----------------------------------------------------
+    show_fov = scene.godeye_show_fov
+    if show_fov:
+        players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
+        fov_angle = 60.0
+        fov_range = 15.0
+        fov_color = (0.0, 0.8, 0.8, 0.6)
+        
+        for player in players:
+            p_loc = player.location
+            forward = (player.matrix_world.to_3x3() @ mathutils.Vector((0, -1, 0))).normalized()
+            up = (player.matrix_world.to_3x3() @ mathutils.Vector((0, 0, 1))).normalized()
+            
+            fov_pts = [p_loc]
+            half_angle = int(fov_angle / 2)
+            for angle in range(-half_angle, half_angle + 1, 5):
+                rot_mat = mathutils.Matrix.Rotation(math.radians(angle), 4, up)
+                dir_vec = (rot_mat @ forward).normalized()
+                fov_pts.append(p_loc + dir_vec * fov_range)
+            fov_pts.append(p_loc)
+            
+            if len(fov_pts) >= 2:
+                batch_fov = batch_for_shader(
+                    shader,
+                    'LINE_STRIP',
+                    {"pos": fov_pts, "color": [fov_color] * len(fov_pts)}
+                )
+                shader.bind()
+                batch_fov.draw(shader)
+
+    gpu.state.depth_test_set('LESS_EQUAL')
+
+
+def update_simulation(scene):
+    """テスト走行シミュレータの更新処理"""
+    rail_obj = scene.godeye_rail_curve
+    if not rail_obj:
+        return
+        
+    global _curve_cache, _prev_locations, _prev_distances
+    points = _curve_cache["points"]
+    distances = _curve_cache["distances"]
+    
+    if not points:
+        # キャッシュが空なら構築を試みる
+        points, distances, _ = get_curve_geometry(rail_obj)
+        if not points:
+            return
+            
+    current_dist = scene.godeye_test_run_dist
+    
+    # 1. プレイヤーをレール上に配置し、接線方向に回転
+    players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
+    if players:
+        p_co = distance_to_co(current_dist, points, distances)
+        
+        # 接線
+        p_co_next = distance_to_co(current_dist + 0.1, points, distances)
+        tangent = (p_co_next - p_co).normalized()
+        
+        # -Y方向を接線に向ける回転を計算
+        rot_diff = mathutils.Vector((0, -1, 0)).rotation_difference(tangent)
+        rot_euler = rot_diff.to_euler()
+        
+        for player in players:
+            player.location = p_co
+            player.rotation_euler = rot_euler
+            player["distance"] = current_dist
+            
+            # ハンドラ側の誤同期を防ぐためキャッシュを直接更新しておく
+            _prev_locations[player.name] = tuple(p_co)
+            _prev_distances[player.name] = current_dist
+            
+    # 2. 敵の出現/非表示制御
+    enemies = [obj for obj in scene.objects if obj.get("spawn") == "ENEMY"]
+    for enemy in enemies:
+        enemy_dist = enemy.get("distance", 0.0)
+        if enemy_dist <= current_dist:
+            enemy.hide_viewport = False
+        else:
+            enemy.hide_viewport = True
+            
+    # 再描画
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
 
 
 def register_handlers():

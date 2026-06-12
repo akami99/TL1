@@ -70,7 +70,17 @@ classes = (
     spawn.OBJECT_PT_spawn,
     panel_godeye.OBJECT_PT_godeye_main,
     panel_godeye.MYADDON_OT_add_area,
+    panel_godeye.MYADDON_OT_create_rail,
+    panel_godeye.MYADDON_OT_add_distance,
 )
+
+
+def update_test_run_dist(self, context):
+    try:
+        from .draw_heatmap import update_simulation
+        update_simulation(context.scene)
+    except Exception as e:
+        print(f"Error updating test run dist: {e}")
 
 
 def register():
@@ -93,6 +103,17 @@ def register():
     bpy.types.Scene.godeye_show_survival = bpy.props.BoolProperty(
         name="生存ライン表示",
         default=True
+    )
+    bpy.types.Scene.godeye_show_fov = bpy.props.BoolProperty(
+        name="視野（FOV）表示",
+        default=True
+    )
+    
+    bpy.types.Scene.godeye_test_run_dist = bpy.props.FloatProperty(
+        name="テスト走行距離",
+        default=0.0,
+        min=0.0,
+        update=update_test_run_dist
     )
 
     for cls in classes:
@@ -128,6 +149,8 @@ def unregister():
     del bpy.types.Scene.godeye_rail_curve
     del bpy.types.Scene.godeye_show_heatmap
     del bpy.types.Scene.godeye_show_survival
+    del bpy.types.Scene.godeye_show_fov
+    del bpy.types.Scene.godeye_test_run_dist
     
     print("レベルエディタが無効化されました")
 
