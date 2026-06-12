@@ -42,6 +42,12 @@ LevelData* LevelLoader::LoadFile(const std::string& fileName) {
 				ParseObject(temp, object);
 				levelData->players.back().translation = temp.translation;
 				levelData->players.back().rotation = temp.rotation;
+				if (object.contains("distance")) {
+					levelData->players.back().distance = object["distance"].get<float>();
+				}
+				if (object.contains("area")) {
+					levelData->players.back().area = object["area"].get<int>();
+				}
 				continue;
 			}
 			else if (spawnType == "ENEMY") {
@@ -52,6 +58,12 @@ LevelData* LevelLoader::LoadFile(const std::string& fileName) {
 				levelData->enemies.back().rotation = temp.rotation;
 				if (object.contains("file_name")) {
 					levelData->enemies.back().fileName = object["file_name"].get<std::string>();
+				}
+				if (object.contains("distance")) {
+					levelData->enemies.back().distance = object["distance"].get<float>();
+				}
+				if (object.contains("area")) {
+					levelData->enemies.back().area = object["area"].get<int>();
 				}
 				continue;
 			}
