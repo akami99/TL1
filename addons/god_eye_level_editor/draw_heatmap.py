@@ -26,19 +26,32 @@ def get_curve_points_via_mesh(curve_obj):
     if not curve_obj or curve_obj.type != 'CURVE':
         return []
     
+    # らせん状のねじれを防ぐため、bevel_depthを一時的に0にしたコピーを作成して評価する
+    temp_curve_data = curve_obj.data.copy()
+    temp_curve_data.bevel_depth = 0.0
+    
+    temp_obj = bpy.data.objects.new(name="TempCurveForSampling", object_data=temp_curve_data)
+    bpy.context.collection.objects.link(temp_obj)
+    
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    eval_obj = curve_obj.evaluated_get(depsgraph)
+    eval_obj = temp_obj.evaluated_get(depsgraph)
     
     try:
         mesh = bpy.data.meshes.new_from_object(eval_obj)
     except Exception as e:
         print(f"Failed to convert curve to mesh: {e}")
-        return []
+        mesh = None
         
-    matrix = curve_obj.matrix_world
-    points = [matrix @ vertex.co for vertex in mesh.vertices]
+    points = []
+    if mesh:
+        matrix = curve_obj.matrix_world
+        points = [matrix @ vertex.co for vertex in mesh.vertices]
+        bpy.data.meshes.remove(mesh)
+        
+    # 一時オブジェクトとデータのクリーンアップ
+    bpy.data.objects.remove(temp_obj, do_unlink=True)
+    bpy.data.curves.remove(temp_curve_data)
     
-    bpy.data.meshes.remove(mesh)
     return points
 
 
@@ -56,6 +69,12 @@ def get_curve_geometry(curve_obj):
         distances.append(total_dist)
         
     return points, distances, total_dist
+
+
+def get_curve_cache():
+    """メモリ上のカーブ幾何データキャッシュを安全に取得する"""
+    global _curve_cache
+    return _curve_cache
 
 
 def get_closest_distance_on_curve(target_co, points, distances):
@@ -290,8 +309,9 @@ def draw_heatmap_callback():
     # 描画表示のON/OFFフラグ
     show_heatmap = scene.godeye_show_heatmap
     show_survival = scene.godeye_show_survival
+    show_fov = scene.godeye_show_fov
     
-    if not show_heatmap and not show_survival:
+    if not show_heatmap and not show_survival and not show_fov:
         return
     
     # キャッシュからデータを取得
@@ -307,9 +327,12 @@ def draw_heatmap_callback():
     
     # シェーダーの初期化
     try:
-        shader = gpu.shader.from_builtin('3D_FLAT_COLOR')
+        shader = gpu.shader.from_builtin('FLAT_COLOR')
     except ValueError:
-        shader = gpu.shader.from_builtin('POLYLINE_FLAT_COLOR')
+        try:
+            shader = gpu.shader.from_builtin('3D_FLAT_COLOR')
+        except ValueError:
+            shader = gpu.shader.from_builtin('POLYLINE_FLAT_COLOR')
         
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('NONE') # 最前面に描画
@@ -320,7 +343,7 @@ def draw_heatmap_callback():
         pass
 
     # ----------------------------------------------------
-    # 1. レールのヒートマップ描画
+    # 1. レールのヒートマップ描画 (一括バッチ)
     # ----------------------------------------------------
     if show_heatmap:
         density_colors = []
@@ -341,27 +364,32 @@ def draw_heatmap_callback():
                 
             density_colors.append(color)
 
-        # 各セグメントを描画
+        # 各セグメントを一括追加
+        pos_coords = []
+        color_coords = []
         for i in range(len(points) - 1):
-            p0 = points[i]
-            p1 = points[i+1]
-            c0 = density_colors[i]
-            c1 = density_colors[i+1]
+            pos_coords.append(points[i])
+            pos_coords.append(points[i+1])
+            color_coords.append(density_colors[i])
+            color_coords.append(density_colors[i+1])
             
+        if pos_coords:
             batch = batch_for_shader(
                 shader,
-                'LINE_STRIP',
-                {"pos": [p0, p1], "color": [c0, c1]}
+                'LINES',
+                {"pos": pos_coords, "color": color_coords}
             )
             shader.bind()
             batch.draw(shader)
 
     # ----------------------------------------------------
-    # 2. 各エネミーの生存ライン（想定ルート）の描画
+    # 2. 各エネミーの生存ライン（想定ルート）の描画 (一括バッチ)
     # ----------------------------------------------------
     if show_survival:
         survival_length = 20.0
         line_color = (0.2, 0.9, 0.2, 0.5)  # 薄緑色
+        survival_pos = []
+        survival_colors = []
         
         for enemy in enemies:
             e_dist = enemy.get("distance", 0.0)
@@ -370,56 +398,72 @@ def draw_heatmap_callback():
             p_start_rail = distance_to_co(e_dist, points, distances)
             offset = e_loc - p_start_rail  # レールからのオフセット
             
-            line_pts = []
             d_step = 1.0
             d_curr = e_dist
             d_max = min(total_dist, e_dist + survival_length)
             
+            prev_pt = None
             while d_curr <= d_max:
                 rail_co = distance_to_co(d_curr, points, distances)
-                line_pts.append(rail_co + offset)
-                d_curr += d_step
+                pt = rail_co + offset
+                if prev_pt is not None:
+                    survival_pos.append(prev_pt)
+                    survival_pos.append(pt)
+                    survival_colors.append(line_color)
+                    survival_colors.append(line_color)
+                prev_pt = pt
+                if d_curr == d_max:
+                    break
+                d_curr = min(d_max, d_curr + d_step)
                 
-            if len(line_pts) >= 2:
-                batch_line = batch_for_shader(
-                    shader,
-                    'LINE_STRIP',
-                    {"pos": line_pts, "color": [line_color] * len(line_pts)}
-                )
-                shader.bind()
-                batch_line.draw(shader)
+        if survival_pos:
+            batch_line = batch_for_shader(
+                shader,
+                'LINES',
+                {"pos": survival_pos, "color": survival_colors}
+            )
+            shader.bind()
+            batch_line.draw(shader)
 
     # ----------------------------------------------------
-    # 3. プレイヤー視野（FOV）の描画
+    # 3. プレイヤー視野（FOV）の描画 (一括バッチ)
     # ----------------------------------------------------
-    show_fov = scene.godeye_show_fov
     if show_fov:
         players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
         fov_angle = 60.0
         fov_range = 15.0
         fov_color = (0.0, 0.8, 0.8, 0.6)
+        fov_pos = []
+        fov_colors = []
         
         for player in players:
             p_loc = player.location
             forward = (player.matrix_world.to_3x3() @ mathutils.Vector((0, -1, 0))).normalized()
             up = (player.matrix_world.to_3x3() @ mathutils.Vector((0, 0, 1))).normalized()
             
-            fov_pts = [p_loc]
+            pts = [p_loc]
             half_angle = int(fov_angle / 2)
             for angle in range(-half_angle, half_angle + 1, 5):
                 rot_mat = mathutils.Matrix.Rotation(math.radians(angle), 4, up)
                 dir_vec = (rot_mat @ forward).normalized()
-                fov_pts.append(p_loc + dir_vec * fov_range)
-            fov_pts.append(p_loc)
+                fov_pts = p_loc + dir_vec * fov_range
+                pts.append(fov_pts)
+            pts.append(p_loc)
             
-            if len(fov_pts) >= 2:
-                batch_fov = batch_for_shader(
-                    shader,
-                    'LINE_STRIP',
-                    {"pos": fov_pts, "color": [fov_color] * len(fov_pts)}
-                )
-                shader.bind()
-                batch_fov.draw(shader)
+            for j in range(len(pts) - 1):
+                fov_pos.append(pts[j])
+                fov_pos.append(pts[j+1])
+                fov_colors.append(fov_color)
+                fov_colors.append(fov_color)
+            
+        if fov_pos:
+            batch_fov = batch_for_shader(
+                shader,
+                'LINES',
+                {"pos": fov_pos, "color": fov_colors}
+            )
+            shader.bind()
+            batch_fov.draw(shader)
 
     gpu.state.depth_test_set('LESS_EQUAL')
 

@@ -152,6 +152,7 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
             curve_data = object.data
             json_object["curve"] = dict()
             json_object["curve"]["dimensions"] = curve_data.dimensions
+            json_object["curve"]["bevel_depth"] = curve_data.bevel_depth
             json_object["curve"]["splines"] = list()
             
             for spline in curve_data.splines:

@@ -147,6 +147,7 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                     if "curve" in obj_data:
                         c_data = obj_data["curve"]
                         curve_data.dimensions = c_data.get("dimensions", '3D')
+                        curve_data.bevel_depth = c_data.get("bevel_depth", 0.2)
                         
                         for spline_data in c_data.get("splines", []):
                             s_type = spline_data.get("type", 'BEZIER')

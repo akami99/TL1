@@ -22,9 +22,10 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
             box_setup.warning(text="基準レールを設定してください。")
             return
 
-        # カーブの総距離を計算
-        from .draw_heatmap import get_curve_geometry
-        _, _, total_dist = get_curve_geometry(rail_obj)
+        # キャッシュから安全に総延長距離を取得
+        from .draw_heatmap import get_curve_cache
+        cache = get_curve_cache()
+        total_dist = cache["total_dist"] if cache["name"] == rail_obj.name else 0.0
         box_setup.label(text=f"総延長距離: {total_dist:.2f} m")
 
         # --- ② イベント編集 (Event Editor) ---
