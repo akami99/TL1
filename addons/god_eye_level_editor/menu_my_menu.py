@@ -19,6 +19,9 @@ class TOPBAR_MT_my_menu(bpy.types.Menu):
         self.layout.operator("myaddon.myaddon_ot_export_scene", text="シーン出力")
         self.layout.operator("myaddon.myaddon_ot_spawn_create_enemy_symbol", text="敵出現ポイントシンボルの作成")
         self.layout.operator("myaddon.myaddon_ot_spawn_create_player_symbol", text="プレイヤー出現ポイントシンボルの作成")
+        self.layout.separator()
+        self.layout.operator("myaddon.myaddon_ot_settings_dialog", text="設定", icon='PREFERENCES')
+        self.layout.operator("myaddon.myaddon_ot_help_dialog", text="使い方ヘルプ", icon='HELP')
 
     # 既存のメニューにサブメニューを追加
     def submenu(self, context):

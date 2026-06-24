@@ -19,6 +19,8 @@ _curve_cache = {
 # 前回位置・距離キャッシュ用
 _prev_locations = {}
 _prev_distances = {}
+_prev_test_run_dist = None
+_prev_rail_name = None
 
 
 def get_curve_points_via_mesh(curve_obj):
@@ -144,6 +146,13 @@ def update_curve_cache(rail_obj):
         "total_dist": total_dist
     }
     print(f"[God Eye] Curve cache updated: {rail_obj.name} ({total_dist:.2f}m)")
+    
+    # 走行位置静的プロパティの上限値を安全に更新
+    try:
+        scene = bpy.context.scene
+        scene.godeye_test_run_max_dist = total_dist
+    except Exception:
+        pass
 
 
 # 再評価無限ループやDepsgraph競合を防ぐためのタイマー遅延実行フラグ
@@ -205,15 +214,38 @@ def trigger_auto_export(scene):
             _autosave_timer_pending = False
         return None  # 1回のみ実行
         
-    bpy.app.timers.register(autosave_callback, first_interval=0.5)
+    delay = scene.godeye_autosave_delay
+    bpy.app.timers.register(autosave_callback, first_interval=delay)
 
 
 def godeye_depsgraph_update_handler(scene, depsgraph):
     """同期およびキャッシュ管理ハンドラ"""
-    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache
+    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_rail_name
     if _updating_godeye:
         return
         
+    curr_rail = scene.godeye_rail_curve
+    if not curr_rail:
+        return
+
+    # 0.1 基準レールの切り替えを監視してリセット
+    curr_rail_name = curr_rail.name
+    if _prev_rail_name is not None and curr_rail_name != _prev_rail_name:
+        scene["godeye_test_run_dist"] = 0.0
+        _prev_test_run_dist = 0.0
+        # 切り替え時に上限値を即時更新
+        points, distances, total_dist = get_curve_geometry(curr_rail) if curr_rail else ([], [], 0.0)
+        try:
+            scene.godeye_test_run_max_dist = total_dist
+        except Exception:
+            pass
+    _prev_rail_name = curr_rail_name
+        
+    curr_sim_dist = scene.get("godeye_test_run_dist", 0.0)
+    if _prev_test_run_dist is None or not math.isclose(curr_sim_dist, _prev_test_run_dist, abs_tol=1e-4):
+        _prev_test_run_dist = curr_sim_dist
+        update_simulation(scene)
+
     # 1. 基準レールが未設定の場合は、シーン内の最初のカーブオブジェクトを自動バインディング
     if not scene.godeye_rail_curve:
         curves = [obj for obj in scene.objects if obj.type == 'CURVE']
@@ -289,7 +321,7 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
         _updating_godeye = False
 
     # 4. 自動エクスポート（ホットリロード）の判定
-    if not _updating_godeye and scene.get("godeye_last_export_path"):
+    if scene.godeye_enable_autosave and not _updating_godeye and scene.get("godeye_last_export_path"):
         should_autosave = False
         for update in depsgraph.updates:
             if isinstance(update.id, bpy.types.Object):
@@ -386,7 +418,7 @@ def draw_heatmap_callback():
     # 2. 各エネミーの生存ライン（想定ルート）の描画 (一括バッチ)
     # ----------------------------------------------------
     if show_survival:
-        survival_length = 20.0
+        survival_length = scene.godeye_survival_length
         line_color = (0.2, 0.9, 0.2, 0.5)  # 薄緑色
         survival_pos = []
         survival_colors = []
@@ -430,8 +462,8 @@ def draw_heatmap_callback():
     # ----------------------------------------------------
     if show_fov:
         players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
-        fov_angle = 60.0
-        fov_range = 15.0
+        fov_angle = scene.godeye_fov_angle
+        fov_range = scene.godeye_fov_range
         fov_color = (0.0, 0.8, 0.8, 0.6)
         fov_pos = []
         fov_colors = []
@@ -484,7 +516,7 @@ def update_simulation(scene):
         if not points:
             return
             
-    current_dist = scene.godeye_test_run_dist
+    current_dist = scene.get("godeye_test_run_dist", 0.0)
     
     # 1. プレイヤーをレール上に配置し、接線方向に回転
     players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]

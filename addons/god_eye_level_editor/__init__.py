@@ -72,15 +72,20 @@ classes = (
     panel_godeye.MYADDON_OT_add_area,
     panel_godeye.MYADDON_OT_create_rail,
     panel_godeye.MYADDON_OT_add_distance,
+    panel_godeye.MYADDON_OT_settings_dialog,
+    panel_godeye.MYADDON_OT_help_dialog,
 )
 
 
-def update_test_run_dist(self, context):
+# 最大距離設定変更時のコールバック
+def update_godeye_test_run_max_dist(self, context):
     try:
-        from .draw_heatmap import update_simulation
-        update_simulation(context.scene)
+        if "godeye_test_run_dist" not in self:
+            self["godeye_test_run_dist"] = 0.0
+        ui_api = self.id_properties_ui("godeye_test_run_dist")
+        ui_api.update(min=0.0, max=self.godeye_test_run_max_dist)
     except Exception as e:
-        print(f"Error updating test run dist: {e}")
+        print(f"Failed to update test_run_dist UI max: {e}")
 
 
 def register():
@@ -95,6 +100,17 @@ def register():
         poll=lambda self, obj: obj.type == 'CURVE'
     )
     
+    # 走行位置最大距離（手動設定可能プロパティ）の登録
+    bpy.types.Scene.godeye_test_run_max_dist = bpy.props.FloatProperty(
+        name="テスト走行最大距離 (m)",
+        default=100.0,
+        min=0.0,
+        update=update_godeye_test_run_max_dist,
+        description="シミュレータ上で走行可能な最大距離（手動変更可能）"
+    )
+    
+
+    
     # 視覚効果のON/OFFプロパティの登録
     bpy.types.Scene.godeye_show_heatmap = bpy.props.BoolProperty(
         name="ヒートマップ表示",
@@ -108,12 +124,34 @@ def register():
         name="視野（FOV）表示",
         default=True
     )
-    
-    bpy.types.Scene.godeye_test_run_dist = bpy.props.FloatProperty(
-        name="テスト走行距離",
-        default=0.0,
-        min=0.0,
-        update=update_test_run_dist
+
+    bpy.types.Scene.godeye_enable_autosave = bpy.props.BoolProperty(
+        name="自動エクスポート有効化",
+        default=True
+    )
+    bpy.types.Scene.godeye_autosave_delay = bpy.props.FloatProperty(
+        name="自動保存遅延（秒）",
+        default=0.5,
+        min=0.1,
+        max=5.0
+    )
+    bpy.types.Scene.godeye_fov_angle = bpy.props.FloatProperty(
+        name="視野角（度）",
+        default=60.0,
+        min=10.0,
+        max=180.0
+    )
+    bpy.types.Scene.godeye_fov_range = bpy.props.FloatProperty(
+        name="視野射程（m）",
+        default=15.0,
+        min=1.0,
+        max=100.0
+    )
+    bpy.types.Scene.godeye_survival_length = bpy.props.FloatProperty(
+        name="生存ライン長さ（m）",
+        default=20.0,
+        min=1.0,
+        max=100.0
     )
 
     for cls in classes:
@@ -131,7 +169,7 @@ def register():
     
     # ヒートマップ描画 & 双方向同期ハンドラの登録
     draw_heatmap.register_handlers()
-    
+
     print("レベルエディタが有効化されました")
 
 
@@ -147,10 +185,16 @@ def unregister():
         
     # プロパティの削除
     del bpy.types.Scene.godeye_rail_curve
+    del bpy.types.Scene.godeye_test_run_max_dist
+
     del bpy.types.Scene.godeye_show_heatmap
     del bpy.types.Scene.godeye_show_survival
     del bpy.types.Scene.godeye_show_fov
-    del bpy.types.Scene.godeye_test_run_dist
+    del bpy.types.Scene.godeye_enable_autosave
+    del bpy.types.Scene.godeye_autosave_delay
+    del bpy.types.Scene.godeye_fov_angle
+    del bpy.types.Scene.godeye_fov_range
+    del bpy.types.Scene.godeye_survival_length
     
     print("レベルエディタが無効化されました")
 
