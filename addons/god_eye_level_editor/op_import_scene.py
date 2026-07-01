@@ -224,12 +224,15 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
             update_curve_cache(context.scene.godeye_rail_curve)
 
         # テスト走行シミュレータの初期化
-        context.scene["godeye_test_run_dist"] = 0.0
         if context.scene.godeye_rail_curve:
+            rail = context.scene.godeye_rail_curve
+            rail["godeye_test_run_dist"] = 0.0
             from .draw_heatmap import get_curve_geometry
-            _, _, total_dist = get_curve_geometry(context.scene.godeye_rail_curve)
+            _, _, total_dist = get_curve_geometry(rail)
             try:
-                context.scene.godeye_test_run_max_dist = total_dist
+                rail.id_properties_ensure()
+                ui_api = rail.id_properties_ui("godeye_test_run_dist")
+                ui_api.update(min=0.0, max=total_dist)
             except Exception:
                 pass
 

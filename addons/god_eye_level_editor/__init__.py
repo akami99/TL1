@@ -5,6 +5,7 @@ from . import op_stretch_vertex
 from . import op_create_ico_sphere
 from . import op_export_scene
 from . import op_import_scene
+from . import op_new_scene
 from . import menu_my_menu
 from . import op_add_filename
 from . import panel_file_name
@@ -22,6 +23,7 @@ if "op_stretch_vertex" in locals():
     importlib.reload(op_create_ico_sphere)
     importlib.reload(op_export_scene)
     importlib.reload(op_import_scene)
+    importlib.reload(op_new_scene)
     importlib.reload(op_add_filename)
     importlib.reload(op_add_collider)
     importlib.reload(panel_file_name)
@@ -56,6 +58,7 @@ classes = (
     op_create_ico_sphere.MYADDON_OT_create_ico_sphere,
     op_export_scene.MYADDON_OT_export_scene,
     op_import_scene.MYADDON_OT_import_scene,
+    op_new_scene.MYADDON_OT_new_scene,
     menu_my_menu.TOPBAR_MT_my_menu,
     op_add_filename.MYADDON_OT_add_filename,
     panel_file_name.OBJECT_PT_file_name,
@@ -72,20 +75,33 @@ classes = (
     panel_godeye.MYADDON_OT_add_area,
     panel_godeye.MYADDON_OT_create_rail,
     panel_godeye.MYADDON_OT_add_distance,
+    panel_godeye.MYADDON_OT_update_rail_info,
     panel_godeye.MYADDON_OT_settings_dialog,
     panel_godeye.MYADDON_OT_help_dialog,
 )
 
 
-# 最大距離設定変更時のコールバック
-def update_godeye_test_run_max_dist(self, context):
-    try:
-        if "godeye_test_run_dist" not in self:
-            self["godeye_test_run_dist"] = 0.0
-        ui_api = self.id_properties_ui("godeye_test_run_dist")
-        ui_api.update(min=0.0, max=self.godeye_test_run_max_dist)
-    except Exception as e:
-        print(f"Failed to update test_run_dist UI max: {e}")
+
+
+def apply_player_locked_rotation(scene):
+    players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
+    for player in players:
+        player.rotation_euler = scene.godeye_locked_player_rotation_euler
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
+
+
+# 視点固定化設定変更時のコールバック
+def update_godeye_lock_player_rotation(self, context):
+    if self.godeye_lock_player_rotation:
+        apply_player_locked_rotation(self)
+
+
+# 固定向き設定変更時のコールバック
+def update_godeye_locked_player_rotation_euler(self, context):
+    if self.godeye_lock_player_rotation:
+        apply_player_locked_rotation(self)
 
 
 def register():
@@ -100,16 +116,24 @@ def register():
         poll=lambda self, obj: obj.type == 'CURVE'
     )
     
-    # 走行位置最大距離（手動設定可能プロパティ）の登録
-    bpy.types.Scene.godeye_test_run_max_dist = bpy.props.FloatProperty(
-        name="テスト走行最大距離 (m)",
-        default=100.0,
-        min=0.0,
-        update=update_godeye_test_run_max_dist,
-        description="シミュレータ上で走行可能な最大距離（手動変更可能）"
+
+    
+    # 視点固定化の有効化プロパティ
+    bpy.types.Scene.godeye_lock_player_rotation = bpy.props.BoolProperty(
+        name="視点の向きを固定する",
+        default=False,
+        update=update_godeye_lock_player_rotation,
+        description="テスト走行中、プレイヤーの視点の向きを固定する"
     )
     
-
+    # 固定する向きのプロパティ (オイラー角)
+    bpy.types.Scene.godeye_locked_player_rotation_euler = bpy.props.FloatVectorProperty(
+        name="固定する向き",
+        subtype='EULER',
+        default=(0.0, 0.0, 0.0),
+        update=update_godeye_locked_player_rotation_euler,
+        description="プレイヤーの向きを固定する際の角度（初期値は-Y方向）"
+    )
     
     # 視覚効果のON/OFFプロパティの登録
     bpy.types.Scene.godeye_show_heatmap = bpy.props.BoolProperty(
@@ -185,7 +209,9 @@ def unregister():
         
     # プロパティの削除
     del bpy.types.Scene.godeye_rail_curve
-    del bpy.types.Scene.godeye_test_run_max_dist
+
+    del bpy.types.Scene.godeye_lock_player_rotation
+    del bpy.types.Scene.godeye_locked_player_rotation_euler
 
     del bpy.types.Scene.godeye_show_heatmap
     del bpy.types.Scene.godeye_show_survival

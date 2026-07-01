@@ -21,6 +21,7 @@ _prev_locations = {}
 _prev_distances = {}
 _prev_test_run_dist = None
 _prev_rail_name = None
+_prev_rail_mode = None
 
 
 def get_curve_points_via_mesh(curve_obj):
@@ -35,25 +36,40 @@ def get_curve_points_via_mesh(curve_obj):
     temp_obj = bpy.data.objects.new(name="TempCurveForSampling", object_data=temp_curve_data)
     bpy.context.collection.objects.link(temp_obj)
     
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    eval_obj = temp_obj.evaluated_get(depsgraph)
-    
+    # デクスグラフに一時オブジェクトを反映させるためにビューレイヤーを更新
     try:
-        mesh = bpy.data.meshes.new_from_object(eval_obj)
+        bpy.context.view_layer.update()
     except Exception as e:
-        print(f"Failed to convert curve to mesh: {e}")
-        mesh = None
-        
-    points = []
-    if mesh:
-        matrix = curve_obj.matrix_world
-        points = [matrix @ vertex.co for vertex in mesh.vertices]
-        bpy.data.meshes.remove(mesh)
-        
-    # 一時オブジェクトとデータのクリーンアップ
-    bpy.data.objects.remove(temp_obj, do_unlink=True)
-    bpy.data.curves.remove(temp_curve_data)
+        print(f"[God Eye] View layer update failed during sampling: {e}")
     
+    points = []
+    temp_mesh = None
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        eval_obj = temp_obj.evaluated_get(depsgraph)
+        temp_mesh = bpy.data.meshes.new_from_object(eval_obj)
+        
+        if temp_mesh:
+            matrix = curve_obj.matrix_world
+            points = [matrix @ vertex.co for vertex in temp_mesh.vertices]
+    except Exception as e:
+        print(f"[God Eye] Failed to convert curve to mesh: {e}")
+    finally:
+        # 一時オブジェクトとデータのクリーンアップを確実に実行
+        if temp_mesh:
+            try:
+                bpy.data.meshes.remove(temp_mesh)
+            except Exception:
+                pass
+        try:
+            bpy.data.objects.remove(temp_obj, do_unlink=True)
+        except Exception:
+            pass
+        try:
+            bpy.data.curves.remove(temp_curve_data)
+        except Exception:
+            pass
+        
     return points
 
 
@@ -138,21 +154,30 @@ def update_curve_cache(rail_obj):
         _curve_cache = {"name": "", "points": [], "distances": [], "total_dist": 0.0}
         return
         
-    points, distances, total_dist = get_curve_geometry(rail_obj)
-    _curve_cache = {
-        "name": rail_obj.name,
-        "points": points,
-        "distances": distances,
-        "total_dist": total_dist
-    }
-    print(f"[God Eye] Curve cache updated: {rail_obj.name} ({total_dist:.2f}m)")
-    
-    # 走行位置静的プロパティの上限値を安全に更新
     try:
-        scene = bpy.context.scene
-        scene.godeye_test_run_max_dist = total_dist
-    except Exception:
-        pass
+        points, distances, total_dist = get_curve_geometry(rail_obj)
+        if not points:
+            _curve_cache["name"] = rail_obj.name
+            return
+            
+        _curve_cache = {
+            "name": rail_obj.name,
+            "points": points,
+            "distances": distances,
+            "total_dist": total_dist
+        }
+        print(f"[God Eye] Curve cache updated: {rail_obj.name} ({total_dist:.2f}m)")
+        
+        # 走行位置プロパティの上限値を安全に更新
+        try:
+            rail_obj.id_properties_ensure()
+            ui_api = rail_obj.id_properties_ui("godeye_test_run_dist")
+            ui_api.update(min=0.0, max=total_dist)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[God Eye] Error updating curve cache: {e}")
+        _curve_cache["name"] = rail_obj.name
 
 
 # 再評価無限ループやDepsgraph競合を防ぐためのタイマー遅延実行フラグ
@@ -220,7 +245,7 @@ def trigger_auto_export(scene):
 
 def godeye_depsgraph_update_handler(scene, depsgraph):
     """同期およびキャッシュ管理ハンドラ"""
-    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_rail_name
+    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_rail_name, _prev_rail_mode
     if _updating_godeye:
         return
         
@@ -228,20 +253,23 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     if not curr_rail:
         return
 
+    # モード切り替えの監視（EDIT ➔ OBJECT 時に強制更新）
+    curr_rail_mode = curr_rail.mode
+    mode_changed = False
+    if _prev_rail_mode is not None and _prev_rail_mode == 'EDIT' and curr_rail_mode == 'OBJECT':
+        mode_changed = True
+    _prev_rail_mode = curr_rail_mode
+
     # 0.1 基準レールの切り替えを監視してリセット
     curr_rail_name = curr_rail.name
     if _prev_rail_name is not None and curr_rail_name != _prev_rail_name:
-        scene["godeye_test_run_dist"] = 0.0
+        curr_rail["godeye_test_run_dist"] = 0.0
         _prev_test_run_dist = 0.0
-        # 切り替え時に上限値を即時更新
-        points, distances, total_dist = get_curve_geometry(curr_rail) if curr_rail else ([], [], 0.0)
-        try:
-            scene.godeye_test_run_max_dist = total_dist
-        except Exception:
-            pass
+        # 切り替え時に上限値およびキャッシュを即時更新
+        update_curve_cache(curr_rail)
     _prev_rail_name = curr_rail_name
         
-    curr_sim_dist = scene.get("godeye_test_run_dist", 0.0)
+    curr_sim_dist = curr_rail.get("godeye_test_run_dist", 0.0)
     if _prev_test_run_dist is None or not math.isclose(curr_sim_dist, _prev_test_run_dist, abs_tol=1e-4):
         _prev_test_run_dist = curr_sim_dist
         update_simulation(scene)
@@ -251,22 +279,14 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
         curves = [obj for obj in scene.objects if obj.type == 'CURVE']
         if curves:
             scene.godeye_rail_curve = curves[0]
+            if "godeye_test_run_dist" not in curves[0]:
+                curves[0]["godeye_test_run_dist"] = 0.0
             trigger_cache_update(curves[0])
             
     rail_obj = scene.godeye_rail_curve
-    if not rail_obj:
-        return
-        
-    # 2. 基準レールの変形や移動（ID更新、およびカーブデータ自体の変形）を検知してキャッシュを更新
-    rail_updated = False
-    for update in depsgraph.updates:
-        if update.id == rail_obj or update.id == rail_obj.data:
-            rail_updated = True
-            break
-            
-    if rail_updated or not _curve_cache["points"] or _curve_cache["name"] != rail_obj.name:
-        # デプスグラフの評価中ループから外れて安全に更新するため、タイマー遅延でキャッシュを更新
-        trigger_cache_update(rail_obj)
+    if rail_obj:
+        if _curve_cache["name"] != rail_obj.name:
+            trigger_cache_update(rail_obj)
         
     # 3. 選択中の出現ポイントオブジェクトの同期
     active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj]
@@ -516,20 +536,23 @@ def update_simulation(scene):
         if not points:
             return
             
-    current_dist = scene.get("godeye_test_run_dist", 0.0)
+    current_dist = rail_obj.get("godeye_test_run_dist", 0.0)
     
-    # 1. プレイヤーをレール上に配置し、接線方向に回転
+    # 1. プレイヤーをレール上に配置し、回転を設定
     players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
     if players:
         p_co = distance_to_co(current_dist, points, distances)
         
-        # 接線
-        p_co_next = distance_to_co(current_dist + 0.1, points, distances)
-        tangent = (p_co_next - p_co).normalized()
-        
-        # -Y方向を接線に向ける回転を計算
-        rot_diff = mathutils.Vector((0, -1, 0)).rotation_difference(tangent)
-        rot_euler = rot_diff.to_euler()
+        if scene.godeye_lock_player_rotation:
+            rot_euler = scene.godeye_locked_player_rotation_euler
+        else:
+            # 接線
+            p_co_next = distance_to_co(current_dist + 0.1, points, distances)
+            tangent = (p_co_next - p_co).normalized()
+            
+            # -Y方向を接線に向ける回転を計算
+            rot_diff = mathutils.Vector((0, -1, 0)).rotation_difference(tangent)
+            rot_euler = rot_diff.to_euler()
         
         for player in players:
             player.location = p_co

@@ -16,6 +16,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         row_rail = box_setup.row(align=True)
         row_rail.prop(scene, "godeye_rail_curve", text="")
         row_rail.operator("myaddon.myaddon_ot_create_rail", text="作成", icon='ADD')
+        box_setup.operator("myaddon.myaddon_ot_update_rail_info", text="レール情報を更新", icon='FILE_REFRESH')
 
         rail_obj = scene.godeye_rail_curve
         if not rail_obj:
@@ -99,21 +100,31 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         box_sim.label(text="④ テスト走行シミュレータ (Simulation)", icon='PLAY')
         rail_obj = scene.godeye_rail_curve
         if rail_obj:
-            if "godeye_test_run_dist" not in scene:
-                scene["godeye_test_run_dist"] = 0.0
-            try:
-                ui_api = scene.id_properties_ui("godeye_test_run_dist")
-                ui_api.update(min=0.0, max=scene.godeye_test_run_max_dist, description="シミュレータ上の走行位置（m）")
-            except Exception:
-                pass
-            box_sim.prop(scene, '["godeye_test_run_dist"]', text="走行位置 (m)", slider=True)
+            # キャッシュから安全に総延長距離を取得してスライダー最大値に設定
+            from .draw_heatmap import get_curve_cache
+            cache = get_curve_cache()
+            max_dist = cache["total_dist"] if cache["name"] == rail_obj.name else 100.0
+            
+            if "godeye_test_run_dist" in rail_obj:
+                try:
+                    rail_obj.id_properties_ensure()
+                    ui_api = rail_obj.id_properties_ui("godeye_test_run_dist")
+                    ui_api.update(min=0.0, max=max_dist, description="シミュレータ上の走行位置（m）")
+                except Exception as e:
+                    print(f"Failed to update test_run_dist UI: {e}")
+                box_sim.prop(rail_obj, '["godeye_test_run_dist"]', text="走行位置 (m)", slider=True)
+            else:
+                box_sim.operator("myaddon.myaddon_ot_update_rail_info", text="シミュレータを初期化", icon='FILE_REFRESH')
+            box_sim.prop(scene, "godeye_lock_player_rotation", text="視点の向きを固定する")
         else:
             box_sim.label(text="（基準レールを設定してください）")
 
-        # --- ⑤ データ出力 (Export) ---
+        # --- ⑤ データ管理 (File & Scene) ---
         box_export = layout.box()
-        box_export.label(text="⑤ データ出力 (Export)", icon='EXPORT')
-        box_export.operator("myaddon.myaddon_ot_export_scene", text="エクスポート")
+        box_export.label(text="⑤ データ管理 (File & Scene)", icon='FILE')
+        row_file = box_export.row(align=True)
+        row_file.operator("myaddon.myaddon_ot_new_scene", text="新規作成", icon='FILE_NEW')
+        row_file.operator("myaddon.myaddon_ot_export_scene", text="エクスポート", icon='EXPORT')
 
 
 class MYADDON_OT_add_area(bpy.types.Operator):
@@ -142,6 +153,9 @@ class MYADDON_OT_create_rail(bpy.types.Operator):
         rail.data.dimensions = '3D'
         rail.data.bevel_depth = 0.2
 
+        # 安全なコンテキストでプロパティを初期化
+        rail["godeye_test_run_dist"] = 0.0
+
         context.scene.godeye_rail_curve = rail
 
         from .draw_heatmap import trigger_cache_update
@@ -159,6 +173,35 @@ class MYADDON_OT_add_distance(bpy.types.Operator):
     def execute(self, context):
         if context.active_object:
             context.active_object["distance"] = 0.0
+        return {"FINISHED"}
+
+
+class MYADDON_OT_update_rail_info(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_update_rail_info"
+    bl_label = "レール情報を更新"
+    bl_description = "レールの長さを再計算し、テスト走行の最大距離などを更新します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        scene = context.scene
+        rail_obj = scene.godeye_rail_curve
+        if not rail_obj:
+            self.report({'WARNING'}, "基準レールが設定されていません")
+            return {'CANCELLED'}
+
+        # 安全なコンテキストでプロパティを初期化
+        if "godeye_test_run_dist" not in rail_obj:
+            rail_obj["godeye_test_run_dist"] = 0.0
+
+        from .draw_heatmap import update_curve_cache
+        update_curve_cache(rail_obj)
+        
+        # ビューポート再描画
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                
+        self.report({'INFO'}, "レール情報を更新しました")
         return {"FINISHED"}
 
 
@@ -194,7 +237,10 @@ class MYADDON_OT_settings_dialog(bpy.types.Operator):
         # シミュレータ設定
         box_sim = layout.box()
         box_sim.label(text="シミュレータ設定", icon='PLAY')
-        box_sim.prop(scene, "godeye_test_run_max_dist", text="テスト走行最大距離 (m)")
+        box_sim.prop(scene, "godeye_lock_player_rotation", text="視点の向きを固定する")
+        row_rot = box_sim.row()
+        row_rot.active = scene.godeye_lock_player_rotation
+        row_rot.prop(scene, "godeye_locked_player_rotation_euler", text="固定する向き")
 
     def execute(self, context):
         # 設定が変更された際に再描画を促す
