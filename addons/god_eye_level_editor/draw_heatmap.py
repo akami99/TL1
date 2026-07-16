@@ -3,12 +3,13 @@ import gpu
 import math
 import mathutils
 from gpu_extras.batch import batch_for_shader
+from bpy_extras import anim_utils
 
 # グローバル変数保持用
 _draw_handler = None
-_updating_godeye = False
+_updating_godeye = False  # 同期無限ループ防止フラグ
 
-# カーブ幾何データのキャッシュ（GPU描画時のコンテキストエラーを回避するため）
+# カーブ幾何データのキャッシュ
 _curve_cache = {
     "name": "",
     "points": [],
@@ -22,6 +23,7 @@ _prev_distances = {}
 _prev_test_run_dist = None
 _prev_rail_name = None
 _prev_rail_mode = None
+_prev_frame_current = None
 
 
 def get_curve_points_via_mesh(curve_obj):
@@ -172,7 +174,16 @@ def update_curve_cache(rail_obj):
         try:
             rail_obj.id_properties_ensure()
             ui_api = rail_obj.id_properties_ui("godeye_test_run_dist")
-            ui_api.update(min=0.0, max=total_dist)
+            ui_api.update(min=0.0, max=total_dist, description="Simulator position")
+            
+            # 再生終了フレームをレールの長さに合わせて自動更新 (タイマー経由で安全に実行)
+            def safe_set_frame_end():
+                try:
+                    bpy.context.scene.frame_end = int(total_dist * 10) + 1
+                except Exception:
+                    pass
+                return None
+            bpy.app.timers.register(safe_set_frame_end)
         except Exception:
             pass
     except Exception as e:
@@ -212,7 +223,7 @@ def trigger_cache_update(rail_obj):
 _autosave_timer_pending = False
 
 def trigger_auto_export(scene):
-    """デバウンスを挟んで自動的にJSONをエクスポートする"""
+    """Auto-export JSON with debounce"""
     global _autosave_timer_pending
     if _autosave_timer_pending:
         return
@@ -237,120 +248,303 @@ def trigger_auto_export(scene):
             print(f"Auto-export failed: {e}")
         finally:
             _autosave_timer_pending = False
-        return None  # 1回のみ実行
+        return None
         
     delay = scene.godeye_autosave_delay
     bpy.app.timers.register(autosave_callback, first_interval=delay)
 
 
-def godeye_depsgraph_update_handler(scene, depsgraph):
-    """同期およびキャッシュ管理ハンドラ"""
-    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_rail_name, _prev_rail_mode
+def get_fcurve_compat(obj, data_path="location"):
+    """Blender 4.4+ のスロット式アクションと、それ以前の双方に対応してF-Curveを取得する"""
+    if not obj.animation_data or not obj.animation_data.action:
+        return None
+        
+    action = obj.animation_data.action
+    
+    # --- Blender 4.4+ の新API (Slotted Actions) ---
+    if hasattr(obj.animation_data, "action_slot") and obj.animation_data.action_slot:
+        try:
+            channelbag = anim_utils.action_get_channelbag_for_slot(action, obj.animation_data.action_slot)
+            if channelbag:
+                for fc in channelbag.fcurves:
+                    if fc.data_path == data_path:
+                        return fc
+        except Exception:
+            pass
+
+    # --- Blender 4.3以前のレガシー互換処理 ---
+    if hasattr(action, "fcurves"):
+        for fc in action.fcurves:
+            if fc.data_path == data_path:
+                return fc
+                
+    return None
+
+
+def force_disable_dopesheet_filter():
+    """ドープシートの『選択物のみ表示』フィルターをスクリプトから自動でOFFにし、
+    エネミーを選択していなくてもキーフレームが常に全員分見えている状態を作る。
+    """
+    try:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'DOPESHEET_EDITOR':
+                    for space in area.spaces:
+                        if space.type == 'DOPESHEET_EDITOR':
+                            # 「選択物のみ表示(Only Show Selected)」をOFFにする
+                            space.show_only_selected = False
+    except Exception:
+        pass
+
+
+def sync_distance_to_keyframe(obj):
+    """【プロパティ -> キーフレーム】 
+    distance(Nパネルや3D移動)が動いた時に、各エネミーオブジェクト自体のキーフレーム位置を更新する
+    """
+    if obj.get("spawn") == "PLAYER":
+        if obj.animation_data:
+            obj.animation_data.action = None
+        return
+        
+    if "distance" not in obj:
+        return
+        
+    dist = obj["distance"]
+    target_frame = int(dist * 10) + 1
+    
+    # キーフレームを挿入してF-Curveを構築/更新
+    if not obj.animation_data:
+        obj.animation_data_create()
+    if not obj.animation_data.action:
+        obj.animation_data.action = bpy.data.actions.new(name=f"Timeline_{obj.name}")
+        
+    # Blender標準の挿入メソッドを使い、安全に全軸(X,Y,Z)のキーフレームを同一フレームに打つ
+    obj.keyframe_insert(data_path="location", frame=target_frame)
+    
+    # 挿入後、すべてのlocationチャンネルのF-Curveを走査し、キーフレーム位置を完全にtarget_frameに合わせる
+    action = obj.animation_data.action
+    fcurves = []
+    if hasattr(obj.animation_data, "action_slot") and obj.animation_data.action_slot:
+        try:
+            channelbag = anim_utils.action_get_channelbag_for_slot(action, obj.animation_data.action_slot)
+            if channelbag:
+                fcurves = [fc for fc in channelbag.fcurves if fc.data_path == "location"]
+        except Exception:
+            pass
+    elif hasattr(action, "fcurves"):
+        fcurves = [fc for fc in action.fcurves if fc.data_path == "location"]
+
+    for fc in fcurves:
+        for k in fc.keyframe_points:
+            k.co = (target_frame, k.co[1])
+            k.handle_left_type = 'FREE'
+            k.handle_right_type = 'FREE'
+        fc.update()
+
+
+def sync_keyframe_to_distance(obj):
+    """【キーフレーム -> プロパティ】
+    ドープシートでキーをドラッグした時に、各エネミーオブジェクト自体の distance プロパティを更新する
+    """
+    if obj.get("spawn") == "PLAYER":
+        return False
+        
+    fcurve = get_fcurve_compat(obj, "location")
+    if not fcurve or len(fcurve.keyframe_points) == 0:
+        return False
+        
+    kp = fcurve.keyframe_points[0]
+    frame = kp.co[0]
+    
+    curr_dist = obj.get("distance", 0.0)
+    expected_frame = int(curr_dist * 10) + 1
+    
+    # ドープシート上での微細な移動も検知
+    if abs(frame - expected_frame) > 0.05:
+        new_dist = (frame - 1) / 10.0
+        if new_dist < 0.0:
+            new_dist = 0.0
+        obj["distance"] = new_dist
+        
+        # 同一スロット内（同一ChannelBag内）の全ての location F-Curve のフレーム位置を統一
+        if obj.animation_data and obj.animation_data.action:
+            action = obj.animation_data.action
+            fcurves = []
+            if hasattr(obj.animation_data, "action_slot") and obj.animation_data.action_slot:
+                try:
+                    channelbag = anim_utils.action_get_channelbag_for_slot(action, obj.animation_data.action_slot)
+                    if channelbag:
+                        fcurves = [fc for fc in channelbag.fcurves if fc.data_path == "location"]
+                except Exception:
+                    pass
+            elif hasattr(action, "fcurves"):
+                fcurves = [fc for fc in action.fcurves if fc.data_path == "location"]
+
+            for fc in fcurves:
+                for k in fc.keyframe_points:
+                    k.co = (frame, k.co[1])
+                fc.update()
+                
+        return True
+        
+    return False
+
+
+def godeye_frame_change_handler(scene, depsgraph=None):
+    """タイムラインの再生ヘッド移動・再生ボタンによるフレーム変化を検知する専用ハンドラ。
+    depsgraph_update_postはIDの実変化が無いと発火しないため、frame_change側で確実に拾う。
+    """
+    global _updating_godeye, _prev_frame_current, _prev_test_run_dist, _curve_cache
+
     if _updating_godeye:
         return
-        
-    curr_rail = scene.godeye_rail_curve
-    if not curr_rail:
+
+    rail_obj = scene.godeye_rail_curve
+    if not rail_obj:
         return
 
-    # モード切り替えの監視（EDIT ➔ OBJECT 時に強制更新）
-    curr_rail_mode = curr_rail.mode
-    mode_changed = False
-    if _prev_rail_mode is not None and _prev_rail_mode == 'EDIT' and curr_rail_mode == 'OBJECT':
-        mode_changed = True
-    _prev_rail_mode = curr_rail_mode
+    curr_frame = scene.frame_current
+    if _prev_frame_current is not None and curr_frame == _prev_frame_current:
+        return
+    _prev_frame_current = curr_frame
 
-    # 0.1 基準レールの切り替えを監視してリセット
-    curr_rail_name = curr_rail.name
-    if _prev_rail_name is not None and curr_rail_name != _prev_rail_name:
-        curr_rail["godeye_test_run_dist"] = 0.0
-        _prev_test_run_dist = 0.0
-        # 切り替え時に上限値およびキャッシュを即時更新
-        update_curve_cache(curr_rail)
-    _prev_rail_name = curr_rail_name
-        
-    curr_sim_dist = curr_rail.get("godeye_test_run_dist", 0.0)
-    if _prev_test_run_dist is None or not math.isclose(curr_sim_dist, _prev_test_run_dist, abs_tol=1e-4):
-        _prev_test_run_dist = curr_sim_dist
-        update_simulation(scene)
+    # キャッシュが無ければ構築
+    if not _curve_cache.get("points") or _curve_cache.get("name") != rail_obj.name:
+        update_curve_cache(rail_obj)
 
-    # 1. 基準レールが未設定の場合は、シーン内の最初のカーブオブジェクトを自動バインディング
+    total_dist = _curve_cache.get("total_dist", 0.0)
+    new_dist = (curr_frame - 1) / 10.0
+    new_dist = max(0.0, min(total_dist, new_dist))
+
+    update_simulation(scene, target_dist=new_dist)
+
+    _updating_godeye = True
+    try:
+        rail_obj["godeye_test_run_dist"] = new_dist
+        _prev_test_run_dist = new_dist
+    except Exception:
+        pass
+    finally:
+        _updating_godeye = False
+
+
+def godeye_depsgraph_update_handler(scene, depsgraph):
+    """同期およびキャッシュ管理ハンドラ（競合完全対策・ハイブリッド版）"""
+    global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_frame_current
+    
+    # 1. 基準レールが未設定の場合は、シーン内の最初のカーブオブジェクトを自動バインディング (最優先実行)
     if not scene.godeye_rail_curve:
         curves = [obj for obj in scene.objects if obj.type == 'CURVE']
         if curves:
             scene.godeye_rail_curve = curves[0]
             if "godeye_test_run_dist" not in curves[0]:
                 curves[0]["godeye_test_run_dist"] = 0.0
-            trigger_cache_update(curves[0])
+            update_curve_cache(curves[0])
             
-    rail_obj = scene.godeye_rail_curve
-    if rail_obj:
-        if _curve_cache["name"] != rail_obj.name:
-            trigger_cache_update(rail_obj)
-        
-    # 3. 選択中の出現ポイントオブジェクトの同期
-    active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj]
-    if not active_objs:
+    curr_rail = scene.godeye_rail_curve
+    if not curr_rail:
         return
-        
+
+    # タイムラインのフィルター状態を自動整備
+    force_disable_dopesheet_filter()
+
+    # キャッシュ確認
+    if not _curve_cache.get("points") or _curve_cache.get("name") != curr_rail.name:
+        update_curve_cache(curr_rail)
+
     points = _curve_cache["points"]
     distances = _curve_cache["distances"]
-    if not points:
-        return
-        
-    _updating_godeye = True
-    try:
-        for obj in active_objs:
-            # PLAYERのみ位置とdistanceを同期し、ENEMYなどは同期しない
-            if obj.get("spawn") != "PLAYER":
-                continue
 
-            curr_loc = tuple(obj.location)
-            prev_loc = _prev_locations.get(obj.name)
-            
-            if "distance" not in obj:
-                obj["distance"] = 0.0
-                
-            curr_dist = obj["distance"]
-            prev_dist = _prev_distances.get(obj.name)
-            
-            if prev_loc is not None and curr_loc != prev_loc:
-                # 3D座標の移動を検知 ➔ 距離の更新
-                new_dist = get_closest_distance_on_curve(obj.location, points, distances)
-                obj["distance"] = new_dist
-                _prev_distances[obj.name] = new_dist
-                _prev_locations[obj.name] = tuple(obj.location)
-                
-            elif prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
-                # distanceプロパティの変更を検知 ➔ 3D座標をスライド移動（オフセット維持）
-                old_rail_co = distance_to_co(prev_dist, points, distances)
-                offset = obj.location - old_rail_co
-                
-                new_rail_co = distance_to_co(curr_dist, points, distances)
-                obj.location = new_rail_co + offset
-                
-                _prev_locations[obj.name] = tuple(obj.location)
-                _prev_distances[obj.name] = curr_dist
-                
-            else:
-                _prev_locations[obj.name] = curr_loc
-                _prev_distances[obj.name] = curr_dist
-    except Exception as e:
-        print(f"Error in godeye sync: {e}")
-    finally:
-        _updating_godeye = False
+    # 2. どちらの操作（アニメーションデータ vs オブジェクトプロパティ）かを更新内容から直接判定
+    is_anim_updating = False
+    for update in depsgraph.updates:
+        # ActionやAnimData（タイムライン操作など）がトリガーされているかを検知
+        if isinstance(update.id, (bpy.types.Action, bpy.types.AnimData)):
+            is_anim_updating = True
+            break
 
-    # 4. 自動エクスポート（ホットリロード）の判定
-    if scene.godeye_enable_autosave and not _updating_godeye and scene.get("godeye_last_export_path"):
-        should_autosave = False
-        for update in depsgraph.updates:
-            if isinstance(update.id, bpy.types.Object):
-                obj = update.id
-                if "spawn" in obj or obj == scene.godeye_rail_curve:
-                    should_autosave = True
-                    break
-        if should_autosave:
-            trigger_auto_export(scene)
+    spawn_objs = [obj for obj in scene.objects if "spawn" in obj]
+
+    # --- パターンA: ユーザーが「ドープシート(キー)」をドラッグしている場合の同期 ---
+    if is_anim_updating and not _updating_godeye:
+        timeline_changed_any = False
+        for obj in spawn_objs:
+            if sync_keyframe_to_distance(obj):
+                timeline_changed_any = True
+                _prev_distances[obj.name] = obj["distance"]
+                
+                # PLAYERの場合は3D位置もレール上に再計算してスライド移動
+                if points and obj.get("spawn") == "PLAYER":
+                    new_loc = distance_to_co(obj["distance"], points, distances)
+                    obj.location = new_loc
+                    _prev_locations[obj.name] = tuple(new_loc)
+
+        if timeline_changed_any:
+            # 画面を再描画
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+            if scene.godeye_enable_autosave:
+                trigger_auto_export(scene)
+            return  # キー移動時はプロパティ側からの逆同期を行わない（これが競合を完全に防ぎます）
+
+    # --- パターンB: ユーザーが「3D移動やNパネルプロパティ」を動かしている場合の同期 ---
+    if not is_anim_updating and not _updating_godeye:
+        _updating_godeye = True
+        try:
+            active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj]
+            for obj in active_objs:
+                curr_dist = obj.get("distance", 0.0)
+                prev_dist = _prev_distances.get(obj.name)
+                
+                # PLAYER: 3D位置とプロパティの双方向
+                if obj.get("spawn") == "PLAYER":
+                    curr_loc = tuple(obj.location)
+                    prev_loc = _prev_locations.get(obj.name)
+                    
+                    if prev_loc is not None and curr_loc != prev_loc:
+                        # 3Dビューでのドラッグ移動 -> プロパティ更新 -> キーフレーム挿入
+                        new_dist = get_closest_distance_on_curve(obj.location, points, distances)
+                        obj["distance"] = new_dist
+                        _prev_distances[obj.name] = new_dist
+                        _prev_locations[obj.name] = tuple(obj.location)
+                        sync_distance_to_keyframe(obj)
+                        
+                    elif prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
+                        # Nパネル距離変更 -> 3D空間配置 -> キーフレーム生成
+                        old_rail_co = distance_to_co(prev_dist, points, distances)
+                        offset = obj.location - old_rail_co
+                        new_rail_co = distance_to_co(curr_dist, points, distances)
+                        
+                        obj.location = new_rail_co + offset
+                        _prev_locations[obj.name] = tuple(obj.location)
+                        _prev_distances[obj.name] = curr_dist
+                        sync_distance_to_keyframe(obj)
+                    else:
+                        _prev_locations[obj.name] = curr_loc
+                        _prev_distances[obj.name] = curr_dist
+                        
+                # ENEMY: Nパネル直接入力 -> キーフレーム挿入
+                else:
+                    if prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
+                        _prev_distances[obj.name] = curr_dist
+                        sync_distance_to_keyframe(obj)
+                    else:
+                        _prev_distances[obj.name] = curr_dist
+        except Exception as e:
+            print(f"[God Eye] Properties sync failed: {e}")
+        finally:
+            _updating_godeye = False
+
+    # 3. 走行距離の変更をタイムライン(フレーム)へ同期 (Nパネル等からの同期)
+    curr_sim_dist = curr_rail.get("godeye_test_run_dist", 0.0)
+    if _prev_test_run_dist is None or not math.isclose(curr_sim_dist, _prev_test_run_dist, abs_tol=1e-4):
+        _prev_test_run_dist = curr_sim_dist
+        target_frame = int(curr_sim_dist * 10) + 1
+        if scene.frame_current != target_frame:
+            scene.frame_current = target_frame
+            _prev_frame_current = target_frame
+        update_simulation(scene)
 
 
 def draw_heatmap_callback():
@@ -520,7 +714,7 @@ def draw_heatmap_callback():
     gpu.state.depth_test_set('LESS_EQUAL')
 
 
-def update_simulation(scene):
+def update_simulation(scene, target_dist=None):
     """テスト走行シミュレータの更新処理"""
     rail_obj = scene.godeye_rail_curve
     if not rail_obj:
@@ -536,7 +730,7 @@ def update_simulation(scene):
         if not points:
             return
             
-    current_dist = rail_obj.get("godeye_test_run_dist", 0.0)
+    current_dist = target_dist if target_dist is not None else rail_obj.get("godeye_test_run_dist", 0.0)
     
     # 1. プレイヤーをレール上に配置し、回転を設定
     players = [obj for obj in scene.objects if obj.get("spawn") == "PLAYER"]
@@ -555,6 +749,10 @@ def update_simulation(scene):
             rot_euler = rot_diff.to_euler()
         
         for player in players:
+            # プレイヤーのアニメーションロックを完全に解除
+            if player.animation_data:
+                player.animation_data.action = None
+                
             player.location = p_co
             player.rotation_euler = rot_euler
             player["distance"] = current_dist
@@ -572,10 +770,17 @@ def update_simulation(scene):
         else:
             enemy.hide_viewport = True
             
-    # 再描画
-    for area in bpy.context.screen.areas:
-        if area.type == 'VIEW_3D':
-            area.tag_redraw()
+    # 安全な画面再描画のトリガー (コンテキストエラーの完全回避)
+    def safe_redraw():
+        try:
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
+        except Exception:
+            pass
+        return None
+    bpy.app.timers.register(safe_redraw)
 
 
 def register_handlers():
@@ -587,6 +792,8 @@ def register_handlers():
         )
     if godeye_depsgraph_update_handler not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(godeye_depsgraph_update_handler)
+    if godeye_frame_change_handler not in bpy.app.handlers.frame_change_post:
+        bpy.app.handlers.frame_change_post.append(godeye_frame_change_handler)
 
 
 def unregister_handlers():
@@ -597,3 +804,5 @@ def unregister_handlers():
         _draw_handler = None
     if godeye_depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(godeye_depsgraph_update_handler)
+    if godeye_frame_change_handler in bpy.app.handlers.frame_change_post:
+        bpy.app.handlers.frame_change_post.remove(godeye_frame_change_handler)

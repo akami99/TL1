@@ -233,8 +233,17 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 rail.id_properties_ensure()
                 ui_api = rail.id_properties_ui("godeye_test_run_dist")
                 ui_api.update(min=0.0, max=total_dist)
+                
+                # 再生終了フレームをレールの長さに合わせて自動更新 (1m=10f)
+                context.scene.frame_end = int(total_dist * 10) + 1
             except Exception:
                 pass
 
-        self.report({'INFO'}, "シーン情報をImportしました")
+        # インポート完了時のキーフレーム同期
+        from .draw_heatmap import sync_distance_to_keyframe
+        for obj in context.scene.objects:
+            if "spawn" in obj:
+                sync_distance_to_keyframe(obj)
+
+        self.report({'INFO'}, "[God Eye] Scene imported")
         return {'FINISHED'}

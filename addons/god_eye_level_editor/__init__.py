@@ -76,11 +76,25 @@ classes = (
     panel_godeye.MYADDON_OT_create_rail,
     panel_godeye.MYADDON_OT_add_distance,
     panel_godeye.MYADDON_OT_update_rail_info,
+    panel_godeye.MYADDON_OT_setup_godeye_workspace,
     panel_godeye.MYADDON_OT_settings_dialog,
     panel_godeye.MYADDON_OT_help_dialog,
 )
 
 
+def update_godeye_rail_thick(self, context):
+    rail = self.godeye_rail_curve
+    if rail:
+        if self.godeye_rail_thick:
+            rail.data.bevel_depth = 0.2
+            rail.display_type = 'WIRE'
+        else:
+            rail.data.bevel_depth = 0.0
+            rail.display_type = 'TEXTURED'
+    # 再描画
+    for area in context.screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
 
 
 def apply_player_locked_rotation(scene):
@@ -116,7 +130,12 @@ def register():
         poll=lambda self, obj: obj.type == 'CURVE'
     )
     
-
+    bpy.types.Scene.godeye_rail_thick = bpy.props.BoolProperty(
+        name="レールを太く表示する",
+        default=False,
+        update=update_godeye_rail_thick,
+        description="基準レールを太く可視化します（重い場合はOFFにしてください）"
+    )
     
     # 視点固定化の有効化プロパティ
     bpy.types.Scene.godeye_lock_player_rotation = bpy.props.BoolProperty(
@@ -209,6 +228,7 @@ def unregister():
         
     # プロパティの削除
     del bpy.types.Scene.godeye_rail_curve
+    del bpy.types.Scene.godeye_rail_thick
 
     del bpy.types.Scene.godeye_lock_player_rotation
     del bpy.types.Scene.godeye_locked_player_rotation_euler

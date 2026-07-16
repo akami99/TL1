@@ -131,6 +131,10 @@ class MYADDON_OT_spawn_create_symbol(bpy.types.Operator):
         new_obj.location = context.scene.cursor.location
         new_obj.rotation_euler = (math.radians(init_rot[0]), math.radians(init_rot[1]), math.radians(init_rot[2]))
 
+        # キーフレーム同期
+        from .draw_heatmap import sync_distance_to_keyframe
+        sync_distance_to_keyframe(new_obj)
+
         print(f"出現ポイントシンボル ({t}) を作成しました")
         return {"FINISHED"}
 

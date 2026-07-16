@@ -16,6 +16,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         row_rail = box_setup.row(align=True)
         row_rail.prop(scene, "godeye_rail_curve", text="")
         row_rail.operator("myaddon.myaddon_ot_create_rail", text="作成", icon='ADD')
+        box_setup.prop(scene, "godeye_rail_thick", text="レールを太く表示する")
         box_setup.operator("myaddon.myaddon_ot_update_rail_info", text="レール情報を更新", icon='FILE_REFRESH')
 
         rail_obj = scene.godeye_rail_curve
@@ -109,10 +110,10 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
                 try:
                     rail_obj.id_properties_ensure()
                     ui_api = rail_obj.id_properties_ui("godeye_test_run_dist")
-                    ui_api.update(min=0.0, max=max_dist, description="シミュレータ上の走行位置（m）")
+                    ui_api.update(min=0.0, max=max_dist, description="Simulator position")
                 except Exception as e:
                     print(f"Failed to update test_run_dist UI: {e}")
-                box_sim.prop(rail_obj, '["godeye_test_run_dist"]', text="走行位置 (m)", slider=True)
+                box_sim.prop(rail_obj, '["godeye_test_run_dist"]', text="Run Position (m)", slider=True)
             else:
                 box_sim.operator("myaddon.myaddon_ot_update_rail_info", text="シミュレータを初期化", icon='FILE_REFRESH')
             box_sim.prop(scene, "godeye_lock_player_rotation", text="視点の向きを固定する")
@@ -125,6 +126,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         row_file = box_export.row(align=True)
         row_file.operator("myaddon.myaddon_ot_new_scene", text="新規作成", icon='FILE_NEW')
         row_file.operator("myaddon.myaddon_ot_export_scene", text="エクスポート", icon='EXPORT')
+        box_export.operator("myaddon.myaddon_ot_setup_godeye_workspace", text="神サマ目線ワークスペースを作成", icon='WINDOW')
 
 
 class MYADDON_OT_add_area(bpy.types.Operator):
@@ -151,7 +153,7 @@ class MYADDON_OT_create_rail(bpy.types.Operator):
         rail.name = "EventRail"
         rail.data.name = "EventRailCurve"
         rail.data.dimensions = '3D'
-        rail.data.bevel_depth = 0.2
+        rail.data.bevel_depth = 0.0
 
         # 安全なコンテキストでプロパティを初期化
         rail["godeye_test_run_dist"] = 0.0
@@ -196,12 +198,75 @@ class MYADDON_OT_update_rail_info(bpy.types.Operator):
         from .draw_heatmap import update_curve_cache
         update_curve_cache(rail_obj)
         
+        # すべての出現ポイント（敵のみ）のキーフレームを強制再同期
+        from .draw_heatmap import sync_distance_to_keyframe
+        for obj in scene.objects:
+            if "spawn" in obj and obj.get("spawn") != "PLAYER":
+                sync_distance_to_keyframe(obj)
+        
         # ビューポート再描画
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
                 
-        self.report({'INFO'}, "レール情報を更新しました")
+        self.report({'INFO'}, "[God Eye] Rail info updated")
+        return {"FINISHED"}
+
+
+class MYADDON_OT_setup_godeye_workspace(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_setup_godeye_workspace"
+    bl_label = "神サマ目線ワークスペースを作成"
+    bl_description = "イベント編集とタイムラインが左右に配置された専用ワークスペースを作成します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        workspace_name = "God Eye Workspace"
+        target_ws = bpy.data.workspaces.get(workspace_name)
+        
+        # すでに存在する場合は、一度削除してクリーンなテンプレートから再構築する
+        if target_ws:
+            curr_ws = context.workspace
+            if curr_ws == target_ws:
+                other_ws = next((ws for ws in bpy.data.workspaces if ws != target_ws), None)
+                if other_ws:
+                    context.window.workspace = other_ws
+            try:
+                bpy.data.workspaces.remove(target_ws)
+            except Exception as e:
+                print(f"Failed to remove workspace: {e}")
+        
+        # 1. 既存の "Animation" ワークスペース (または "アニメーション") を探す
+        anim_ws = bpy.data.workspaces.get("Animation") or bpy.data.workspaces.get("アニメーション")
+        
+        if anim_ws:
+            # 既存のアニメーションワークスペースを複製して構築
+            orig_ws = context.workspace
+            context.window.workspace = anim_ws
+            bpy.ops.workspace.duplicate()
+            target_ws = context.workspace
+            target_ws.name = workspace_name
+            context.window.workspace = orig_ws
+        else:
+            # なければ、現在のワークスペースを複製するフォールバック
+            bpy.ops.workspace.duplicate()
+            target_ws = context.workspace
+            target_ws.name = workspace_name
+            
+        # ワークスペースをアクティブにする
+        context.window.workspace = target_ws
+        
+        # 下部（または一部）のタイムライン/アニメーションエリアを Dope Sheet に変更し、表示設定を最適化
+        for area in target_ws.screens[0].areas:
+            if area.type in ('TIMELINE', 'DOPESHEET_EDITOR'):
+                area.type = 'DOPESHEET_EDITOR'
+                space = area.spaces.active
+                if space:
+                    space.mode = 'DOPESHEET'
+                    # 非表示の敵や非選択オブジェクトのキーフレームも常に表示する！
+                    space.dopesheet.show_hidden = True
+                    space.dopesheet.show_only_selected = False
+                
+        self.report({'INFO'}, "[God Eye] Workspace created")
         return {"FINISHED"}
 
 
