@@ -156,7 +156,11 @@ def register():
     
     # 視覚効果のON/OFFプロパティの登録
     bpy.types.Scene.godeye_show_heatmap = bpy.props.BoolProperty(
-        name="ヒートマップ表示",
+        name="レールヒートマップ表示",
+        default=True
+    )
+    bpy.types.Scene.godeye_show_dopesheet_heatmap = bpy.props.BoolProperty(
+        name="ドープシートヒートマップ表示",
         default=True
     )
     bpy.types.Scene.godeye_show_survival = bpy.props.BoolProperty(
@@ -234,6 +238,7 @@ def unregister():
     del bpy.types.Scene.godeye_locked_player_rotation_euler
 
     del bpy.types.Scene.godeye_show_heatmap
+    del bpy.types.Scene.godeye_show_dopesheet_heatmap
     del bpy.types.Scene.godeye_show_survival
     del bpy.types.Scene.godeye_show_fov
     del bpy.types.Scene.godeye_enable_autosave

@@ -92,7 +92,8 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         # --- ③ 視覚効果 (Visualization) ---
         box_vis = layout.box()
         box_vis.label(text="③ 視覚効果 (Visualization)", icon='RESTRICT_VIEW_OFF')
-        box_vis.prop(scene, "godeye_show_heatmap", text="ヒートマップを表示")
+        box_vis.prop(scene, "godeye_show_heatmap", text="レールのヒートマップを表示")
+        box_vis.prop(scene, "godeye_show_dopesheet_heatmap", text="ドープシートのヒートマップを表示")
         box_vis.prop(scene, "godeye_show_survival", text="生存ラインを表示")
         box_vis.prop(scene, "godeye_show_fov", text="プレイヤー視野（FOV）を表示")
 

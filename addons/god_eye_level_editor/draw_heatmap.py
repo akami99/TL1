@@ -7,6 +7,7 @@ from bpy_extras import anim_utils
 
 # グローバル変数保持用
 _draw_handler = None
+_dopesheet_draw_handler = None
 _updating_godeye = False  # 同期無限ループ防止フラグ
 
 # カーブ幾何データのキャッシュ
@@ -20,6 +21,7 @@ _curve_cache = {
 # 前回位置・距離キャッシュ用
 _prev_locations = {}
 _prev_distances = {}
+_prev_keyframe_frames = {}   # 各エネミーオブジェクトのキーフレームの前回フレーム位置キャッシュ
 _prev_test_run_dist = None
 _prev_rail_name = None
 _prev_rail_mode = None
@@ -359,7 +361,7 @@ def sync_keyframe_to_distance(obj):
     curr_dist = obj.get("distance", 0.0)
     expected_frame = int(curr_dist * 10) + 1
     
-    # ドープシート上での微細な移動も検知
+    # ドープシート上での微細な移動も検知 (しきい値判定で自己ゲート)
     if abs(frame - expected_frame) > 0.05:
         new_dist = (frame - 1) / 10.0
         if new_dist < 0.0:
@@ -429,7 +431,7 @@ def godeye_frame_change_handler(scene, depsgraph=None):
 
 
 def godeye_depsgraph_update_handler(scene, depsgraph):
-    """同期およびキャッシュ管理ハンドラ（競合完全対策・ハイブリッド版）"""
+    """同期およびキャッシュ管理ハンドラ"""
     global _updating_godeye, _prev_locations, _prev_distances, _curve_cache, _prev_test_run_dist, _prev_frame_current
     
     # 1. 基準レールが未設定の場合は、シーン内の最初のカーブオブジェクトを自動バインディング (最優先実行)
@@ -455,29 +457,47 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     points = _curve_cache["points"]
     distances = _curve_cache["distances"]
 
-    # 2. どちらの操作（アニメーションデータ vs オブジェクトプロパティ）かを更新内容から直接判定
-    is_anim_updating = False
-    for update in depsgraph.updates:
-        # ActionやAnimData（タイムライン操作など）がトリガーされているかを検知
-        if isinstance(update.id, (bpy.types.Action, bpy.types.AnimData)):
-            is_anim_updating = True
-            break
-
     spawn_objs = [obj for obj in scene.objects if "spawn" in obj]
 
-    # --- パターンA: ユーザーが「ドープシート(キー)」をドラッグしている場合の同期 ---
-    if is_anim_updating and not _updating_godeye:
-        timeline_changed_any = False
+    # --- パターンA: キーフレーム位置と distance プロパティ、どちらが変化したかを個別に判定 ---
+    timeline_changed_any = False
+    if not _updating_godeye:
         for obj in spawn_objs:
-            if sync_keyframe_to_distance(obj):
+            if obj.get("spawn") == "PLAYER":
+                continue  # プレイヤーはキーフレームを持たないため対象外
+
+            fcurve = get_fcurve_compat(obj, "location")
+            if not fcurve or len(fcurve.keyframe_points) == 0:
+                continue
+
+            curr_frame = fcurve.keyframe_points[0].co[0]
+            curr_dist = obj.get("distance", 0.0)
+            expected_frame = int(curr_dist * 10) + 1
+
+            # 既に一致していれば何もせず、両方のキャッシュだけ更新
+            if abs(curr_frame - expected_frame) <= 0.05:
+                _prev_keyframe_frames[obj.name] = curr_frame
+                _prev_distances[obj.name] = curr_dist
+                continue
+
+            prev_frame = _prev_keyframe_frames.get(obj.name)
+            prev_dist = _prev_distances.get(obj.name)
+
+            frame_moved = prev_frame is not None and abs(curr_frame - prev_frame) > 0.05
+            dist_moved = prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4)
+
+            if dist_moved and not frame_moved:
+                # Nパネル側が変更された -> キーフレームへ反映
+                sync_distance_to_keyframe(obj)
+                _prev_keyframe_frames[obj.name] = int(curr_dist * 10) + 1
+                _prev_distances[obj.name] = curr_dist
                 timeline_changed_any = True
-                _prev_distances[obj.name] = obj["distance"]
-                
-                # PLAYERの場合は3D位置もレール上に再計算してスライド移動
-                if points and obj.get("spawn") == "PLAYER":
-                    new_loc = distance_to_co(obj["distance"], points, distances)
-                    obj.location = new_loc
-                    _prev_locations[obj.name] = tuple(new_loc)
+            else:
+                # ドープシート側(キーフレーム)が変更された、または初回同期 -> distanceプロパティへ反映
+                if sync_keyframe_to_distance(obj):
+                    _prev_keyframe_frames[obj.name] = fcurve.keyframe_points[0].co[0]
+                    _prev_distances[obj.name] = obj["distance"]
+                    timeline_changed_any = True
 
         if timeline_changed_any:
             # 画面を再描画
@@ -486,10 +506,10 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                     area.tag_redraw()
             if scene.godeye_enable_autosave:
                 trigger_auto_export(scene)
-            return  # キー移動時はプロパティ側からの逆同期を行わない（これが競合を完全に防ぎます）
+            return  # キー由来の変更時はプロパティ側からの逆同期を行わない
 
-    # --- パターンB: ユーザーが「3D移動やNパネルプロパティ」を動かしている場合の同期 ---
-    if not is_anim_updating and not _updating_godeye:
+    # --- パターンB: 3D移動やNパネルプロパティの変更検知 (パターンAが何も検出しなかった時のみ) ---
+    if not _updating_godeye:
         _updating_godeye = True
         try:
             active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj]
@@ -503,15 +523,14 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                     prev_loc = _prev_locations.get(obj.name)
                     
                     if prev_loc is not None and curr_loc != prev_loc:
-                        # 3Dビューでのドラッグ移動 -> プロパティ更新 -> キーフレーム挿入
+                        # 3Dビューでのドラッグ移動 -> プロパティ更新
                         new_dist = get_closest_distance_on_curve(obj.location, points, distances)
                         obj["distance"] = new_dist
                         _prev_distances[obj.name] = new_dist
                         _prev_locations[obj.name] = tuple(obj.location)
-                        sync_distance_to_keyframe(obj)
                         
                     elif prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
-                        # Nパネル距離変更 -> 3D空間配置 -> キーフレーム生成
+                        # Nパネル距離変更 -> 3D空間配置
                         old_rail_co = distance_to_co(prev_dist, points, distances)
                         offset = obj.location - old_rail_co
                         new_rail_co = distance_to_co(curr_dist, points, distances)
@@ -519,17 +538,8 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                         obj.location = new_rail_co + offset
                         _prev_locations[obj.name] = tuple(obj.location)
                         _prev_distances[obj.name] = curr_dist
-                        sync_distance_to_keyframe(obj)
                     else:
                         _prev_locations[obj.name] = curr_loc
-                        _prev_distances[obj.name] = curr_dist
-                        
-                # ENEMY: Nパネル直接入力 -> キーフレーム挿入
-                else:
-                    if prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
-                        _prev_distances[obj.name] = curr_dist
-                        sync_distance_to_keyframe(obj)
-                    else:
                         _prev_distances[obj.name] = curr_dist
         except Exception as e:
             print(f"[God Eye] Properties sync failed: {e}")
@@ -713,6 +723,90 @@ def draw_heatmap_callback():
 
     gpu.state.depth_test_set('LESS_EQUAL')
 
+def draw_dopesheet_heatmap_callback():
+    """ドープシート/タイムラインの背景に、距離ベースの密集度ヒートマップを面で描画する。"""
+    global _curve_cache
+    scene = bpy.context.scene
+
+    if not scene.godeye_show_dopesheet_heatmap:
+        return
+
+    context = bpy.context
+    space = context.space_data
+    region = context.region
+    if space is None or region is None or region.type != 'WINDOW':
+        return
+
+    # ドープシート/アクションエディタ/タイムラインいずれのモードでも表示する
+    if hasattr(space, "mode") and space.mode not in ('DOPESHEET', 'ACTION', 'TIMELINE'):
+        return
+
+    total_dist = _curve_cache.get("total_dist", 0.0)
+    if total_dist <= 0.0:
+        return
+
+    enemies = [obj for obj in scene.objects if obj.get("spawn") == "ENEMY"]
+
+    view2d = region.view2d
+    max_frame = int(total_dist * 10) + 1
+    step = 5  # 0.5m刻みでサンプリング (負荷と精度のバランス)
+
+    y0 = 0
+    y1 = region.height
+
+    verts = []
+    colors = []
+
+    prev_x = None
+    prev_color = None
+
+    frame = 1
+    while frame <= max_frame + step:
+        f = min(frame, max_frame)
+        d_val = (f - 1) / 10.0
+
+        count = 0
+        for enemy in enemies:
+            e_dist = enemy.get("distance", 0.0)
+            if abs(e_dist - d_val) <= 10.0:
+                count += 1
+
+        if count == 0:
+            color = (0.1, 0.4, 0.9, 0.12)
+        elif count == 1:
+            color = (0.9, 0.8, 0.1, 0.18)
+        else:
+            color = (0.9, 0.1, 0.1, 0.25)
+
+        x, _ = view2d.view_to_region(f, 0, clip=False)
+
+        if prev_x is not None:
+            verts.extend([
+                (prev_x, y0), (x, y0), (x, y1),
+                (prev_x, y0), (x, y1), (prev_x, y1),
+            ])
+            colors.extend([prev_color] * 6)
+
+        prev_x = x
+        prev_color = color
+
+        if f == max_frame:
+            break
+        frame += step
+
+    if not verts:
+        return
+
+    try:
+        shader = gpu.shader.from_builtin('FLAT_COLOR')
+    except ValueError:
+        shader = gpu.shader.from_builtin('2D_FLAT_COLOR')
+
+    gpu.state.blend_set('ALPHA')
+    batch = batch_for_shader(shader, 'TRIS', {"pos": verts, "color": colors})
+    shader.bind()
+    batch.draw(shader)
+    gpu.state.blend_set('NONE')
 
 def update_simulation(scene, target_dist=None):
     """テスト走行シミュレータの更新処理"""
@@ -785,10 +879,14 @@ def update_simulation(scene, target_dist=None):
 
 def register_handlers():
     """ハンドラの登録"""
-    global _draw_handler
+    global _draw_handler, _dopesheet_draw_handler
     if _draw_handler is None:
         _draw_handler = bpy.types.SpaceView3D.draw_handler_add(
             draw_heatmap_callback, (), 'WINDOW', 'POST_VIEW'
+        )
+    if _dopesheet_draw_handler is None:
+        _dopesheet_draw_handler = bpy.types.SpaceDopeSheetEditor.draw_handler_add(
+            draw_dopesheet_heatmap_callback, (), 'WINDOW', 'POST_PIXEL'
         )
     if godeye_depsgraph_update_handler not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(godeye_depsgraph_update_handler)
@@ -798,10 +896,13 @@ def register_handlers():
 
 def unregister_handlers():
     """ハンドラの解除"""
-    global _draw_handler
+    global _draw_handler, _dopesheet_draw_handler
     if _draw_handler is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_draw_handler, 'WINDOW')
         _draw_handler = None
+    if _dopesheet_draw_handler is not None:
+        bpy.types.SpaceDopeSheetEditor.draw_handler_remove(_dopesheet_draw_handler, 'WINDOW')
+        _dopesheet_draw_handler = None
     if godeye_depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(godeye_depsgraph_update_handler)
     if godeye_frame_change_handler in bpy.app.handlers.frame_change_post:
