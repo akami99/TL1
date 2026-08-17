@@ -72,7 +72,10 @@ classes = (
     spawn.MYADDON_OT_spawn_create_enemy_symbol,
     spawn.OBJECT_PT_spawn,
     panel_godeye.OBJECT_PT_godeye_main,
-    panel_godeye.MYADDON_OT_add_area,
+    panel_godeye.MYADDON_OT_create_area,
+    panel_godeye.MYADDON_OT_create_stop_point,
+    panel_godeye.MYADDON_OT_delete_area,
+    panel_godeye.MYADDON_OT_select_object,
     panel_godeye.MYADDON_OT_create_rail,
     panel_godeye.MYADDON_OT_add_distance,
     panel_godeye.MYADDON_OT_update_rail_info,
@@ -119,6 +122,10 @@ def update_godeye_locked_player_rotation_euler(self, context):
 
 
 def register():
+    # クラスの登録を最初に行う（CollectionProperty で GodeyeAreaZone を参照するため）
+    for cls in classes:
+        bpy.utils.register_class(cls)
+
     # set menu description with author name from bl_info
     author_name = bl_info.get("author", "Ren Akamine")
     menu_my_menu.TOPBAR_MT_my_menu.bl_description = "拡張メニュー by " + author_name
@@ -171,6 +178,14 @@ def register():
         name="視野（FOV）表示",
         default=True
     )
+    bpy.types.Scene.godeye_show_areas = bpy.props.BoolProperty(
+        name="レール戦闘エリア表示",
+        default=True
+    )
+    bpy.types.Scene.godeye_show_dopesheet_areas = bpy.props.BoolProperty(
+        name="ドープシート戦闘エリア表示",
+        default=True
+    )
 
     bpy.types.Scene.godeye_enable_autosave = bpy.props.BoolProperty(
         name="自動エクスポート有効化",
@@ -200,9 +215,6 @@ def register():
         min=1.0,
         max=100.0
     )
-
-    for cls in classes:
-        bpy.utils.register_class(cls)
 
     bpy.types.TOPBAR_MT_editor_menus.append(menu_my_menu.TOPBAR_MT_my_menu.submenu)
     
@@ -241,6 +253,8 @@ def unregister():
     del bpy.types.Scene.godeye_show_dopesheet_heatmap
     del bpy.types.Scene.godeye_show_survival
     del bpy.types.Scene.godeye_show_fov
+    del bpy.types.Scene.godeye_show_areas
+    del bpy.types.Scene.godeye_show_dopesheet_areas
     del bpy.types.Scene.godeye_enable_autosave
     del bpy.types.Scene.godeye_autosave_delay
     del bpy.types.Scene.godeye_fov_angle

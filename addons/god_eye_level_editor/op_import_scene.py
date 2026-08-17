@@ -201,7 +201,16 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 new_obj["distance"] = obj_data["distance"]
 
             if "area" in obj_data:
-                new_obj["area"] = obj_data["area"]
+                new_obj["area"] = True
+                if "end_distance" in obj_data:
+                    new_obj["end_distance"] = obj_data["end_distance"]
+                if "time_limit" in obj_data:
+                    new_obj["time_limit"] = obj_data["time_limit"]
+
+            if "stop_point" in obj_data:
+                new_obj["stop_point"] = True
+                if "time_limit" in obj_data:
+                    new_obj["time_limit"] = obj_data["time_limit"]
 
             if "collider" in obj_data:
                 coll_data = obj_data["collider"]
@@ -217,6 +226,46 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
         # 全てのオブジェクトを再帰的に生成
         for obj_data in data.get("objects", []):
             create_object_recursive(obj_data)
+
+        # もしobjects内にareaオブジェクトが存在せず、トップレベルareasにデータがある場合の復元
+        from .draw_heatmap import distance_to_co, get_curve_cache
+        cache = get_curve_cache()
+        points = cache.get("points", [])
+        distances = cache.get("distances", [])
+
+        has_area_obj = any(obj.get("area") for obj in context.scene.objects)
+        if not has_area_obj and "areas" in data:
+            for a_data in data["areas"]:
+                a_name = a_data.get("name", "Area_Zone")
+                a_dist = a_data.get("distance", a_data.get("start_distance", 0.0))
+                a_end_dist = a_data.get("end_distance", a_dist + 30.0)
+                a_time = a_data.get("time_limit", 60.0)
+
+                area_obj = bpy.data.objects.new(name=a_name, object_data=None)
+                area_obj.empty_display_type = 'SINGLE_ARROW'
+                area_obj.empty_display_size = 1.0
+                context.collection.objects.link(area_obj)
+                area_obj.location = distance_to_co(a_dist, points, distances) if points else (0, 0, 0)
+                area_obj["area"] = True
+                area_obj["distance"] = a_dist
+                area_obj["end_distance"] = a_end_dist
+                area_obj["time_limit"] = a_time
+
+        has_stop_obj = any(obj.get("stop_point") for obj in context.scene.objects)
+        if not has_stop_obj and "stop_points" in data:
+            for s_data in data["stop_points"]:
+                s_name = s_data.get("name", "StopPoint")
+                s_dist = s_data.get("distance", 0.0)
+                s_time = s_data.get("time_limit", 0.0)
+
+                stop_obj = bpy.data.objects.new(name=s_name, object_data=None)
+                stop_obj.empty_display_type = 'CUBE'
+                stop_obj.empty_display_size = 1.0
+                context.collection.objects.link(stop_obj)
+                stop_obj.location = distance_to_co(s_dist, points, distances) if points else (0, 0, 0)
+                stop_obj["stop_point"] = True
+                stop_obj["distance"] = s_dist
+                stop_obj["time_limit"] = s_time
 
         # インポート完了後にキャッシュを強制再構築し、バウンディングボックスの評価を更新
         if context.scene.godeye_rail_curve:
@@ -240,10 +289,12 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 pass
 
         # インポート完了時のキーフレーム同期
-        from .draw_heatmap import sync_distance_to_keyframe
+        from .draw_heatmap import sync_distance_to_keyframe, sync_area_distance_to_keyframe
         for obj in context.scene.objects:
-            if "spawn" in obj:
+            if "spawn" in obj or obj.get("stop_point"):
                 sync_distance_to_keyframe(obj)
+            elif obj.get("area"):
+                sync_area_distance_to_keyframe(obj)
 
         self.report({'INFO'}, "[God Eye] Scene imported")
         return {'FINISHED'}

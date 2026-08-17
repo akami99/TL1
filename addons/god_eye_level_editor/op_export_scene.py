@@ -146,6 +146,16 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         # カスタムプロパティ'area'
         if "area" in object:
             json_object["area"] = object["area"]
+            if "end_distance" in object:
+                json_object["end_distance"] = object["end_distance"]
+            if "time_limit" in object:
+                json_object["time_limit"] = object["time_limit"]
+
+        # カスタムプロパティ'stop_point'
+        if "stop_point" in object:
+            json_object["stop_point"] = object["stop_point"]
+            if "time_limit" in object:
+                json_object["time_limit"] = object["time_limit"]
 
         # カーブデータのエクスポート
         if object.type == 'CURVE':
@@ -221,6 +231,27 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
             
             # シーン直下のオブジェクトをルートノード(深さ0)とし、再帰関数で走査
             self.parse_scene_recursive_json(json_object_root["objects"], object, 0)
+
+        # エリア情報（交戦区間）を出力
+        json_object_root["areas"] = [
+            {
+                "name": obj.name,
+                "start_distance": obj.get("distance", 0.0),
+                "end_distance": obj.get("end_distance", obj.get("distance", 0.0) + 30.0),
+                "time_limit": obj.get("time_limit", 60.0),
+            }
+            for obj in bpy.context.scene.objects if obj.get("area")
+        ]
+
+        # 停止ポイントを出力
+        json_object_root["stop_points"] = [
+            {
+                "name": obj.name,
+                "distance": obj.get("distance", 0.0),
+                "time_limit": obj.get("time_limit", 0.0),
+            }
+            for obj in bpy.context.scene.objects if obj.get("stop_point")
+        ]
 
         # オブジェクトをJSON文字列にエンコード (改行・インデント付き)
         json_text = json.dumps(json_object_root, ensure_ascii=False, cls=json.JSONEncoder, indent=4)
