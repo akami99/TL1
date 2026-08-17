@@ -640,6 +640,13 @@ class MYADDON_OT_settings_dialog(bpy.types.Operator):
         layout = self.layout
         scene = context.scene
 
+        # ヒートマップ密集度設定
+        box_heat = layout.box()
+        box_heat.label(text="ヒートマップ密集度設定 (Density Levels)", icon='COLOR')
+        box_heat.prop(scene, "godeye_heatmap_search_range", text="密集判定範囲 (前後 ±m)")
+        box_heat.prop(scene, "godeye_heatmap_threshold_low", text="中密度閾値 (黄色 / 体数以上)")
+        box_heat.prop(scene, "godeye_heatmap_threshold_high", text="高密度閾値 (赤色 / 体数以上)")
+
         # 交戦パラメータ
         box_param = layout.box()
         box_param.label(text="交戦・視野パラメータ (Parameters)", icon='PREFERENCES')

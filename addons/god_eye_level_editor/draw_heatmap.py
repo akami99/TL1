@@ -28,58 +28,70 @@ _prev_rail_mode = None
 _prev_frame_current = None
 
 
-def get_curve_points_via_mesh(curve_obj):
-    """カーブオブジェクトをポリゴンメッシュに一時変換してサンプル点群をワールド座標で取得する"""
+def interpolate_bezier(p0, handle_right, handle_left, p1, steps=12):
+    """2点間の3次ベジェ曲線を数学的にサンプリング"""
+    pts = []
+    for step in range(steps):
+        t = step / steps
+        u = 1.0 - t
+        tt = t * t
+        uu = u * u
+        uuu = uu * u
+        ttt = tt * t
+        
+        # 3次ベジェ方程式
+        pt = (uuu * p0) + (3.0 * uu * t * handle_right) + (3.0 * u * tt * handle_left) + (ttt * p1)
+        pts.append(pt)
+    return pts
+
+
+def get_curve_points_fast(curve_obj, steps_per_segment=12):
+    """カーブオブジェクトから一時オブジェクトを作らず直接ワールド座標の点群を計算する（GPUコールバック内でも完全に安全）"""
     if not curve_obj or curve_obj.type != 'CURVE':
         return []
-    
-    # らせん状のねじれを防ぐため、bevel_depthを一時的に0にしたコピーを作成して評価する
-    temp_curve_data = curve_obj.data.copy()
-    temp_curve_data.bevel_depth = 0.0
-    
-    temp_obj = bpy.data.objects.new(name="TempCurveForSampling", object_data=temp_curve_data)
-    bpy.context.collection.objects.link(temp_obj)
-    
-    # デクスグラフに一時オブジェクトを反映させるためにビューレイヤーを更新
-    try:
-        bpy.context.view_layer.update()
-    except Exception as e:
-        print(f"[God Eye] View layer update failed during sampling: {e}")
-    
+        
+    curve_data = curve_obj.data
+    mat = curve_obj.matrix_world
     points = []
-    temp_mesh = None
-    try:
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        eval_obj = temp_obj.evaluated_get(depsgraph)
-        temp_mesh = bpy.data.meshes.new_from_object(eval_obj)
-        
-        if temp_mesh:
-            matrix = curve_obj.matrix_world
-            points = [matrix @ vertex.co for vertex in temp_mesh.vertices]
-    except Exception as e:
-        print(f"[God Eye] Failed to convert curve to mesh: {e}")
-    finally:
-        # 一時オブジェクトとデータのクリーンアップを確実に実行
-        if temp_mesh:
-            try:
-                bpy.data.meshes.remove(temp_mesh)
-            except Exception:
-                pass
-        try:
-            bpy.data.objects.remove(temp_obj, do_unlink=True)
-        except Exception:
-            pass
-        try:
-            bpy.data.curves.remove(temp_curve_data)
-        except Exception:
-            pass
-        
+    
+    for spline in curve_data.splines:
+        if spline.type == 'BEZIER':
+            bp_count = len(spline.bezier_points)
+            if bp_count == 0:
+                continue
+            if bp_count == 1:
+                points.append(mat @ spline.bezier_points[0].co)
+                continue
+                
+            segments = bp_count if spline.use_cyclic_u else bp_count - 1
+            for i in range(segments):
+                bp0 = spline.bezier_points[i]
+                bp1 = spline.bezier_points[(i + 1) % bp_count]
+                
+                p0 = bp0.co
+                h0 = bp0.handle_right
+                h1 = bp1.handle_left
+                p1 = bp1.co
+                
+                seg_pts = interpolate_bezier(p0, h0, h1, p1, steps_per_segment)
+                for pt in seg_pts:
+                    points.append(mat @ pt)
+                    
+            if not spline.use_cyclic_u:
+                points.append(mat @ spline.bezier_points[-1].co)
+                
+        elif spline.type == 'POLY':
+            for pt in spline.points:
+                points.append(mat @ pt.co.to_3d())
+            if spline.use_cyclic_u and len(spline.points) > 0:
+                points.append(mat @ spline.points[0].co.to_3d())
+                
     return points
 
 
 def get_curve_geometry(curve_obj):
     """サンプル点群、各点の累積距離、総距離を計算して返す"""
-    points = get_curve_points_via_mesh(curve_obj)
+    points = get_curve_points_fast(curve_obj)
     if not points:
         return [], [], 0.0
         
@@ -818,18 +830,22 @@ def draw_heatmap_callback():
     # 1. レールのヒートマップ描画 (一括バッチ)
     # ----------------------------------------------------
     if show_heatmap:
+        search_range = getattr(scene, "godeye_heatmap_search_range", 10.0)
+        th_low = getattr(scene, "godeye_heatmap_threshold_low", 1)
+        th_high = max(th_low + 1, getattr(scene, "godeye_heatmap_threshold_high", 3))
+
         density_colors = []
         for i, p in enumerate(points):
             d_val = distances[i]
             count = 0
             for enemy in enemies:
                 e_dist = enemy.get("distance", 0.0)
-                if abs(e_dist - d_val) <= 10.0:  # 前後10m範囲
+                if abs(e_dist - d_val) <= search_range:
                     count += get_spawn_weight(enemy)
                     
-            if count == 0:
+            if count < th_low:
                 color = (0.1, 0.4, 0.9, 0.6)  # 青: 安全
-            elif count == 1:
+            elif count < th_high:
                 color = (0.9, 0.8, 0.1, 0.7)  # 黄: 小競り合い
             else:
                 color = (0.9, 0.1, 0.1, 0.8)  # 赤: 激戦区
@@ -1089,6 +1105,10 @@ def draw_dopesheet_heatmap_callback():
 
     # 1. 密集度ヒートマップの描画
     if show_dopesheet_heatmap:
+        search_range = getattr(scene, "godeye_heatmap_search_range", 10.0)
+        th_low = getattr(scene, "godeye_heatmap_threshold_low", 1)
+        th_high = max(th_low + 1, getattr(scene, "godeye_heatmap_threshold_high", 3))
+
         enemies = [obj for obj in scene.objects if obj.get("spawn") in ("ENEMY", "ENEMY_GROUP")]
         step = 5  # 0.5m刻みでサンプリング (負荷と精度のバランス)
         verts = []
@@ -1104,12 +1124,12 @@ def draw_dopesheet_heatmap_callback():
             count = 0
             for enemy in enemies:
                 e_dist = enemy.get("distance", 0.0)
-                if abs(e_dist - d_val) <= 10.0:
+                if abs(e_dist - d_val) <= search_range:
                     count += get_spawn_weight(enemy)
 
-            if count == 0:
+            if count < th_low:
                 color = (0.1, 0.4, 0.9, 0.12)
-            elif count == 1:
+            elif count < th_high:
                 color = (0.9, 0.8, 0.1, 0.18)
             else:
                 color = (0.9, 0.1, 0.1, 0.25)

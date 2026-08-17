@@ -222,6 +222,27 @@ def register():
         min=1.0,
         max=100.0
     )
+    bpy.types.Scene.godeye_heatmap_search_range = bpy.props.FloatProperty(
+        name="密集判定範囲 (±m)",
+        default=10.0,
+        min=1.0,
+        max=50.0,
+        description="敵の密集度を計算する前後方向の探索範囲（m）"
+    )
+    bpy.types.Scene.godeye_heatmap_threshold_low = bpy.props.IntProperty(
+        name="中密度閾値 (体数)",
+        default=1,
+        min=1,
+        max=50,
+        description="この体数以上で中密度（黄色）になります（未満は青色/安全）"
+    )
+    bpy.types.Scene.godeye_heatmap_threshold_high = bpy.props.IntProperty(
+        name="高密度閾値 (体数)",
+        default=3,
+        min=2,
+        max=50,
+        description="この体数以上で高密度（赤色/激戦区）になります"
+    )
 
     bpy.types.TOPBAR_MT_editor_menus.append(menu_my_menu.TOPBAR_MT_my_menu.submenu)
     
@@ -268,6 +289,9 @@ def unregister():
     del bpy.types.Scene.godeye_fov_angle
     del bpy.types.Scene.godeye_fov_range
     del bpy.types.Scene.godeye_survival_length
+    del bpy.types.Scene.godeye_heatmap_search_range
+    del bpy.types.Scene.godeye_heatmap_threshold_low
+    del bpy.types.Scene.godeye_heatmap_threshold_high
     
     print("レベルエディタが無効化されました")
 
