@@ -38,6 +38,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         row_create = box_editor.row(align=True)
         row_create.operator("myaddon.myaddon_ot_spawn_create_player_symbol", text="プレイヤー", icon='OUTLINER_OB_LIGHT')
         row_create.operator("myaddon.myaddon_ot_spawn_create_enemy_symbol", text="エネミー", icon='OUTLINER_OB_MESH')
+        row_create.operator("myaddon.myaddon_ot_spawn_create_group_symbol", text="集団エネミー", icon='COMMUNITY')
         row_create.operator("myaddon.myaddon_ot_create_look_target", text="注視ターゲット", icon='HIDE_OFF')
         box_editor.separator()
 
@@ -59,6 +60,25 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
             # 各種プロパティ
             box_editor.separator()
             box_editor.prop(active_obj, '["spawn"]', text="出現タイプ")
+
+            # 集団スポーナープロパティ
+            if active_obj.get("spawn") == "ENEMY_GROUP":
+                box_group = box_editor.box()
+                box_group.label(text="集団スポーン設定:", icon='COMMUNITY')
+                try:
+                    active_obj.id_properties_ensure()
+                    ui_count = active_obj.id_properties_ui("spawn_count")
+                    ui_count.update(min=1, soft_min=1, description="出現する敵の総数")
+                    ui_interval = active_obj.id_properties_ui("spawn_interval")
+                    ui_interval.update(min=0.0, soft_min=0.0, description="敵が出現する間隔（秒）")
+                except Exception:
+                    pass
+                box_group.prop(active_obj, '["spawn_count"]', text="出現数")
+                box_group.prop(active_obj, '["spawn_interval"]', text="出現間隔 (秒)")
+                if "enemy_type" not in active_obj:
+                    active_obj["enemy_type"] = "normal"
+                box_group.prop(active_obj, '["enemy_type"]', text="敵種別")
+
             if "file_name" in active_obj:
                 box_editor.prop(active_obj, '["file_name"]', text="モデル")
             
@@ -118,7 +138,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         box_areas.separator()
 
         # 選択中オブジェクトがエリアまたは停止ポイントの場合のプロパティ表示
-        if active_obj and active_obj.get("area"):
+        if active_obj and active_obj.get("area") and "spawn" not in active_obj:
             box_areas.label(text=f"選択中: {active_obj.name} (交戦エリア)", icon='OBJECT_DATA')
             
             # 開始位置
@@ -149,22 +169,20 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
                 box_areas.prop(active_obj, '["time_limit"]', text="制限時間 (秒)")
 
             box_areas.separator()
-            box_areas.operator("myaddon.myaddon_ot_delete_area", text="エリアを削除", icon='TRASH')
+            box_areas.operator("myaddon.myaddon_ot_delete_area", text="交戦エリアを削除", icon='TRASH')
 
         elif active_obj and active_obj.get("stop_point"):
-            box_areas.label(text=f"選択中: {active_obj.name} (停止ポイント)", icon='OBJECT_DATA')
-            
-            # 停止位置
+            box_areas.label(text=f"選択中: {active_obj.name} (停止ポイント)", icon='PAUSE')
             if "distance" in active_obj:
                 try:
                     ui_api = active_obj.id_properties_ui("distance")
-                    ui_api.update(min=0.0, max=total_dist, description="足を止める位置（m）")
+                    ui_api.update(min=0.0, max=total_dist, description="停止ポイントの位置（m）")
                 except Exception:
                     pass
                 box_areas.prop(active_obj, '["distance"]', text="停止位置 (m)", slider=True)
 
             if "time_limit" in active_obj:
-                box_areas.prop(active_obj, '["time_limit"]', text="個別制限時間 (秒, 0=なし)")
+                box_areas.prop(active_obj, '["time_limit"]', text="停止時間 (秒, 0=無限)")
 
             box_areas.separator()
             box_areas.operator("myaddon.myaddon_ot_delete_area", text="停止ポイントを削除", icon='TRASH')
@@ -172,7 +190,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
             box_areas.label(text="（調整するエリア/停止ポイントを選択）", icon='INFO')
 
         # シーン内の一覧表示
-        area_objs = [obj for obj in scene.objects if obj.get("area")]
+        area_objs = [obj for obj in scene.objects if obj.get("area") and "spawn" not in obj]
         stop_objs = [obj for obj in scene.objects if obj.get("stop_point")]
         look_objs = [obj for obj in scene.objects if obj.get("look_target")]
         if area_objs or stop_objs or look_objs:

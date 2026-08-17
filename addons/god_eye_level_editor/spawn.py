@@ -124,7 +124,6 @@ class MYADDON_OT_spawn_create_symbol(bpy.types.Operator):
         # 各種プロパティ設定
         new_obj["spawn"] = spawn_val
         new_obj["file_name"] = file_rel_path
-        new_obj["area"] = 1
         new_obj["distance"] = 0.0
         
         # 位置と回転の設定
@@ -160,6 +159,35 @@ class MYADDON_OT_spawn_create_enemy_symbol(bpy.types.Operator):
 
     def execute(self, context):
         bpy.ops.myaddon.myaddon_ot_spawn_create_symbol('EXEC_DEFAULT', type="Enemy")
+        return {"FINISHED"}
+
+
+# 集団敵シンボル作成オペレータ
+class MYADDON_OT_spawn_create_group_symbol(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_spawn_create_group_symbol"
+    bl_label = "集団エネミー出現ポイントの作成"
+    bl_description = "複数の敵を連続出現させる集団スポーンポイントシンボルを作成します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        bpy.ops.myaddon.myaddon_ot_spawn_create_symbol('EXEC_DEFAULT', type="Enemy")
+        new_obj = context.active_object
+        if new_obj:
+            new_obj.name = "EnemyGroupSpawn"
+            new_obj["spawn"] = "ENEMY_GROUP"
+            new_obj["spawn_count"] = 3
+            new_obj["spawn_interval"] = 0.5   # 秒
+            new_obj["enemy_type"] = "normal"  # ゲーム側識別子
+            try:
+                new_obj.id_properties_ensure()
+                ui_count = new_obj.id_properties_ui("spawn_count")
+                ui_count.update(min=1, soft_min=1, description="出現する敵の総数")
+                ui_interval = new_obj.id_properties_ui("spawn_interval")
+                ui_interval.update(min=0.0, soft_min=0.0, description="敵が出現する間隔（秒）")
+            except Exception:
+                pass
+            from .draw_heatmap import sync_distance_to_keyframe
+            sync_distance_to_keyframe(new_obj)
         return {"FINISHED"}
 
 

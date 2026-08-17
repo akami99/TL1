@@ -200,6 +200,10 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 
             if "spawn" in obj_data:
                 new_obj["spawn"] = obj_data["spawn"]
+                if obj_data.get("spawn") == "ENEMY_GROUP":
+                    new_obj["spawn_count"] = obj_data.get("spawn_count", 3)
+                    new_obj["spawn_interval"] = obj_data.get("spawn_interval", 0.5)
+                    new_obj["enemy_type"] = obj_data.get("enemy_type", "normal")
                 
             if "file_name" in obj_data:
                 new_obj["file_name"] = obj_data["file_name"]

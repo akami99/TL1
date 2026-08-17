@@ -70,6 +70,7 @@ classes = (
     spawn.MYADDON_OT_spawn_create_symbol,
     spawn.MYADDON_OT_spawn_create_player_symbol,
     spawn.MYADDON_OT_spawn_create_enemy_symbol,
+    spawn.MYADDON_OT_spawn_create_group_symbol,
     spawn.OBJECT_PT_spawn,
     panel_godeye.OBJECT_PT_godeye_main,
     panel_godeye.MYADDON_OT_create_area,

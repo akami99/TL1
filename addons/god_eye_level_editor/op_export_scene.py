@@ -138,6 +138,10 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         # カスタムプロパティ'spawn'
         if "spawn" in object:
             json_object["spawn"] = object["spawn"]
+            if object.get("spawn") == "ENEMY_GROUP":
+                json_object["spawn_count"] = object.get("spawn_count", 3)
+                json_object["spawn_interval"] = object.get("spawn_interval", 0.5)
+                json_object["enemy_type"] = object.get("enemy_type", "normal")
 
         # カスタムプロパティ'distance'
         if "distance" in object:

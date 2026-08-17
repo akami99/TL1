@@ -418,7 +418,7 @@ def sync_area_distance_to_keyframe(obj):
     """【エリア: プロパティ -> キーフレーム】
     エリアの distance, end_distance から開始・終了キーフレーム（2点）を設定する
     """
-    if not obj.get("area"):
+    if not obj.get("area") or "spawn" in obj:
         return
 
     start_dist = obj.get("distance", 0.0)
@@ -465,7 +465,7 @@ def sync_area_keyframe_to_distance(obj):
     """【エリア: キーフレーム -> プロパティ】
     ドープシートでエリアの開始・終了キーをドラッグした時に、distance, end_distance を更新する
     """
-    if not obj.get("area"):
+    if not obj.get("area") or "spawn" in obj:
         return False
 
     fcurve = get_fcurve_compat(obj, "location")
@@ -562,7 +562,7 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     distances = _curve_cache["distances"]
 
     spawn_objs = [obj for obj in scene.objects if ("spawn" in obj and obj.get("spawn") != "PLAYER") or obj.get("stop_point") or obj.get("look_target")]
-    area_objs = [obj for obj in scene.objects if obj.get("area")]
+    area_objs = [obj for obj in scene.objects if obj.get("area") and "spawn" not in obj]
 
     # --- パターンA: キーフレーム位置と distance プロパティ、どちらが変化したかを個別に判定 ---
     timeline_changed_any = False
@@ -585,8 +585,14 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
             prev_frame = _prev_keyframe_frames.get(obj.name)
             prev_dist = _prev_distances.get(obj.name)
 
-            frame_moved = prev_frame is not None and not math.isclose(curr_frame, prev_frame, abs_tol=0.05)
-            dist_moved = prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4)
+            frame_moved = (
+                isinstance(prev_frame, (int, float)) and
+                not math.isclose(curr_frame, float(prev_frame), abs_tol=0.05)
+            )
+            dist_moved = (
+                isinstance(prev_dist, (int, float)) and
+                not math.isclose(curr_dist, float(prev_dist), abs_tol=1e-4)
+            )
 
             if dist_moved and not frame_moved:
                 sync_distance_to_keyframe(obj)
@@ -612,14 +618,24 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
             expected_f0 = int(curr_dist * 10) + 1
             expected_f1 = max(expected_f0 + 1, int(curr_end_dist * 10) + 1)
 
+            if abs(curr_f0 - expected_f0) <= 0.05 and abs(curr_f1 - expected_f1) <= 0.05:
+                _prev_keyframe_frames[obj.name] = (curr_f0, curr_f1)
+                _prev_distances[obj.name] = curr_dist
+                continue
+
             prev_frames = _prev_keyframe_frames.get(obj.name)
             prev_dist = _prev_distances.get(obj.name)
 
-            frame_moved = prev_frames is not None and (
-                not math.isclose(curr_f0, prev_frames[0], abs_tol=0.05) or
-                not math.isclose(curr_f1, prev_frames[1], abs_tol=0.05)
+            frame_moved = (
+                isinstance(prev_frames, (tuple, list)) and len(prev_frames) >= 2 and (
+                    not math.isclose(curr_f0, prev_frames[0], abs_tol=0.05) or
+                    not math.isclose(curr_f1, prev_frames[1], abs_tol=0.05)
+                )
             )
-            dist_moved = prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4)
+            dist_moved = (
+                isinstance(prev_dist, (int, float)) and
+                not math.isclose(curr_dist, float(prev_dist), abs_tol=1e-4)
+            )
 
             if dist_moved and not frame_moved:
                 sync_area_distance_to_keyframe(obj)
@@ -673,8 +689,8 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                         _prev_locations[obj.name] = curr_loc
                         _prev_distances[obj.name] = curr_dist
 
-                # LOOK TARGET / ENEMY: 3D座標は自由配置、プロパティ変更時または3D移動時はキー同期
-                elif obj.get("look_target") or obj.get("spawn") == "ENEMY":
+                # LOOK TARGET / ENEMY / ENEMY_GROUP: 3D座標は自由配置、プロパティ変更時または3D移動時はキー同期
+                elif obj.get("look_target") or obj.get("spawn") in ("ENEMY", "ENEMY_GROUP"):
                     curr_loc = tuple(obj.location)
                     prev_loc = _prev_locations.get(obj.name)
                     if prev_loc is not None and curr_loc != prev_loc:
@@ -687,7 +703,7 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                     _prev_distances[obj.name] = curr_dist
 
                 # AREA / STOP POINT: 3Dドラッグ移動時はレール上にスナップ
-                elif obj.get("area"):
+                elif obj.get("area") and "spawn" not in obj:
                     curr_loc = tuple(obj.location)
                     prev_loc = _prev_locations.get(obj.name)
                     if prev_loc is not None and curr_loc != prev_loc:
@@ -740,6 +756,13 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
         update_simulation(scene)
 
 
+def get_spawn_weight(obj):
+    """密集度計算用の重み。集団スポーナーは出現数分を加算する"""
+    if obj.get("spawn") == "ENEMY_GROUP":
+        return max(1, int(obj.get("spawn_count", 1)))
+    return 1
+
+
 def draw_heatmap_callback():
     """3Dビューポートへのヒートマップおよび生存ラインの描画処理 (キャッシュを参照し安全に描画)"""
     global _curve_cache
@@ -763,8 +786,8 @@ def draw_heatmap_callback():
     if not points:
         return
         
-    # エネミーオブジェクトを抽出
-    enemies = [obj for obj in scene.objects if obj.get("spawn") == "ENEMY"]
+    # エネミーオブジェクトを抽出 (集団スポーナー含む)
+    enemies = [obj for obj in scene.objects if obj.get("spawn") in ("ENEMY", "ENEMY_GROUP")]
     
     # シェーダーの初期化
     try:
@@ -794,7 +817,7 @@ def draw_heatmap_callback():
             for enemy in enemies:
                 e_dist = enemy.get("distance", 0.0)
                 if abs(e_dist - d_val) <= 10.0:  # 前後10m範囲
-                    count += 1
+                    count += get_spawn_weight(enemy)
                     
             if count == 0:
                 color = (0.1, 0.4, 0.9, 0.6)  # 青: 安全
@@ -911,7 +934,7 @@ def draw_heatmap_callback():
     # ----------------------------------------------------
     if scene.godeye_show_areas:
         offset = mathutils.Vector((0.0, 0.0, 0.3)) # 少しZ方向に浮かせる
-        area_objs = [obj for obj in scene.objects if obj.get("area")]
+        area_objs = [obj for obj in scene.objects if obj.get("area") and "spawn" not in obj]
         stop_objs = [obj for obj in scene.objects if obj.get("stop_point")]
         
         # 4-1. エリア（交戦区間）のライン描画
@@ -1035,7 +1058,7 @@ def draw_dopesheet_heatmap_callback():
 
     # 1. 密集度ヒートマップの描画
     if show_dopesheet_heatmap:
-        enemies = [obj for obj in scene.objects if obj.get("spawn") == "ENEMY"]
+        enemies = [obj for obj in scene.objects if obj.get("spawn") in ("ENEMY", "ENEMY_GROUP")]
         step = 5  # 0.5m刻みでサンプリング (負荷と精度のバランス)
         verts = []
         colors = []
@@ -1051,7 +1074,7 @@ def draw_dopesheet_heatmap_callback():
             for enemy in enemies:
                 e_dist = enemy.get("distance", 0.0)
                 if abs(e_dist - d_val) <= 10.0:
-                    count += 1
+                    count += get_spawn_weight(enemy)
 
             if count == 0:
                 color = (0.1, 0.4, 0.9, 0.12)
@@ -1090,7 +1113,7 @@ def draw_dopesheet_heatmap_callback():
 
     # 2. 戦闘エリアおよび停止ポイントのマーカー・ライン描画 (ドープシート)
     if show_areas:
-        area_objs = [obj for obj in scene.objects if obj.get("area")]
+        area_objs = [obj for obj in scene.objects if obj.get("area") and "spawn" not in obj]
         stop_objs = [obj for obj in scene.objects if obj.get("stop_point")]
         
         line_pos = []
@@ -1270,7 +1293,7 @@ def update_simulation(scene, target_dist=None):
             _prev_distances[player.name] = current_dist
             
     # 2. 敵の出現/非表示制御
-    enemies = [obj for obj in scene.objects if obj.get("spawn") == "ENEMY"]
+    enemies = [obj for obj in scene.objects if obj.get("spawn") in ("ENEMY", "ENEMY_GROUP")]
     for enemy in enemies:
         enemy_dist = enemy.get("distance", 0.0)
         if enemy_dist <= current_dist:
