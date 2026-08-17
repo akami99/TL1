@@ -97,6 +97,20 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
             else:
                 box_editor.operator("myaddon.myaddon_ot_add_collider", text="コライダーを追加", icon='ADD')
 
+            # 移動経路（Path Curve）の設定
+            if active_obj.get("spawn") in ("ENEMY", "ENEMY_GROUP"):
+                box_editor.separator()
+                box_path = box_editor.box()
+                box_path.label(text="個別移動経路 (Path):", icon='CURVE_DATA')
+                path_children = [child for child in active_obj.children if child.type == 'CURVE']
+                if path_children:
+                    path_obj = path_children[0]
+                    row_p = box_path.row(align=True)
+                    op_p = row_p.operator("myaddon.myaddon_ot_select_object", text=f"経路を選択 ({path_obj.name})", icon='EDITMODE_HLT')
+                    op_p.target_object_name = path_obj.name
+                else:
+                    box_path.operator("myaddon.myaddon_ot_enemy_create_path", text="移動経路 (CURVE) を作成", icon='ADD')
+
         elif active_obj and active_obj.get("look_target"):
             box_editor.label(text=f"選択中: {active_obj.name} (注視ターゲット)", icon='HIDE_OFF')
             if "distance" in active_obj:
@@ -406,6 +420,48 @@ class MYADDON_OT_create_look_target(bpy.types.Operator):
                 area.tag_redraw()
 
         self.report({'INFO'}, f"注視ターゲット作成: {target_name}")
+        return {"FINISHED"}
+
+
+class MYADDON_OT_enemy_create_path(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_enemy_create_path"
+    bl_label = "敵の移動経路を作成"
+    bl_description = "選択中の敵オブジェクトの子として移動経路カーブを作成します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and "spawn" in obj and obj.get("spawn") != "PLAYER"
+
+    def execute(self, context):
+        enemy = context.active_object
+        curve_data = bpy.data.curves.new(name=f"{enemy.name}_Path", type='CURVE')
+        curve_data.dimensions = '3D'
+        spline = curve_data.splines.new('BEZIER')
+        spline.bezier_points.add(1)  # 2点構成
+        
+        spline.bezier_points[0].co = (0.0, 0.0, 0.0)
+        spline.bezier_points[0].handle_left_type = spline.bezier_points[0].handle_right_type = 'AUTO'
+        spline.bezier_points[1].co = (0.0, -5.0, 0.0)  # -Y方向へ5m
+        spline.bezier_points[1].handle_left_type = spline.bezier_points[1].handle_right_type = 'AUTO'
+
+        path_obj = bpy.data.objects.new(name=f"{enemy.name}_Path", object_data=curve_data)
+        context.collection.objects.link(path_obj)
+        path_obj.parent = enemy
+        path_obj.location = (0.0, 0.0, 0.0)
+        path_obj.rotation_euler = (0.0, 0.0, 0.0)
+
+        # カーブを選択してアクティブ化
+        bpy.ops.object.select_all(action='DESELECT')
+        path_obj.select_set(True)
+        context.view_layer.objects.active = path_obj
+
+        for area in context.screen.areas:
+            if area.type in ('VIEW_3D', 'DOPESHEET_EDITOR'):
+                area.tag_redraw()
+
+        self.report({'INFO'}, f"移動経路を作成: {path_obj.name}")
         return {"FINISHED"}
 
 

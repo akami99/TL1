@@ -228,6 +228,7 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         
         # ノード名
         json_object_root["name"] = "scene"
+        json_object_root["survival_length"] = bpy.context.scene.godeye_survival_length
         # オブジェクトリストを作成
         json_object_root["objects"] = list()
 
@@ -252,7 +253,7 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
                 "end_distance": obj.get("end_distance", obj.get("distance", 0.0) + 30.0),
                 "time_limit": obj.get("time_limit", 60.0),
             }
-            for obj in bpy.context.scene.objects if obj.get("area")
+            for obj in bpy.context.scene.objects if obj.get("area") and "spawn" not in obj
         ]
 
         # 停止ポイントを出力

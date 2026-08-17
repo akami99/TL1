@@ -76,6 +76,7 @@ classes = (
     panel_godeye.MYADDON_OT_create_area,
     panel_godeye.MYADDON_OT_create_stop_point,
     panel_godeye.MYADDON_OT_create_look_target,
+    panel_godeye.MYADDON_OT_enemy_create_path,
     panel_godeye.MYADDON_OT_delete_area,
     panel_godeye.MYADDON_OT_select_object,
     panel_godeye.MYADDON_OT_create_rail,

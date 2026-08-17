@@ -763,6 +763,14 @@ def get_spawn_weight(obj):
     return 1
 
 
+def get_enemy_path_curve(enemy):
+    """敵オブジェクトの子要素から移動経路CURVEを探索して返す"""
+    for child in enemy.children:
+        if child.type == 'CURVE':
+            return child
+    return None
+
+
 def draw_heatmap_callback():
     """3Dビューポートへのヒートマップおよび生存ラインの描画処理 (キャッシュを参照し安全に描画)"""
     global _curve_cache
@@ -847,38 +855,61 @@ def draw_heatmap_callback():
             batch.draw(shader)
 
     # ----------------------------------------------------
-    # 2. 各エネミーの生存ライン（想定ルート）の描画 (一括バッチ)
+    # 2. 各エネミーの生存ライン（想定ルート / 個別移動経路）の描画 (一括バッチ)
     # ----------------------------------------------------
     if show_survival:
         survival_length = scene.godeye_survival_length
         line_color = (0.2, 0.9, 0.2, 0.5)  # 薄緑色
+        path_color = (0.3, 0.95, 0.3, 0.85)  # 個別経路を持つ場合は少し明るい緑色
         survival_pos = []
         survival_colors = []
         
         for enemy in enemies:
-            e_dist = enemy.get("distance", 0.0)
-            e_loc = enemy.location
-            
-            p_start_rail = distance_to_co(e_dist, points, distances)
-            offset = e_loc - p_start_rail  # レールからのオフセット
-            
-            d_step = 1.0
-            d_curr = e_dist
-            d_max = min(total_dist, e_dist + survival_length)
-            
-            prev_pt = None
-            while d_curr <= d_max:
-                rail_co = distance_to_co(d_curr, points, distances)
-                pt = rail_co + offset
-                if prev_pt is not None:
-                    survival_pos.append(prev_pt)
-                    survival_pos.append(pt)
-                    survival_colors.append(line_color)
-                    survival_colors.append(line_color)
-                prev_pt = pt
-                if d_curr == d_max:
-                    break
-                d_curr = min(d_max, d_curr + d_step)
+            # 1. 敵の子オブジェクトに CURVE (個別移動経路) があるか確認
+            path_curve = get_enemy_path_curve(enemy)
+            if path_curve:
+                p_pts, p_dists, p_total = get_curve_geometry(path_curve)
+                if p_pts and len(p_pts) >= 2:
+                    d_max = min(p_total, survival_length)
+                    prev_pt = None
+                    d_step = 0.5
+                    d_curr = 0.0
+                    while d_curr <= d_max:
+                        pt = distance_to_co(d_curr, p_pts, p_dists)
+                        if prev_pt is not None:
+                            survival_pos.append(prev_pt)
+                            survival_pos.append(pt)
+                            survival_colors.append(path_color)
+                            survival_colors.append(path_color)
+                        prev_pt = pt
+                        if d_curr == d_max:
+                            break
+                        d_curr = min(d_max, d_curr + d_step)
+            else:
+                # 2. 個別経路が無い敵は、既存のレール並走ロジック
+                e_dist = enemy.get("distance", 0.0)
+                e_loc = enemy.location
+                
+                p_start_rail = distance_to_co(e_dist, points, distances)
+                offset = e_loc - p_start_rail  # レールからのオフセット
+                
+                d_step = 1.0
+                d_curr = e_dist
+                d_max = min(total_dist, e_dist + survival_length)
+                
+                prev_pt = None
+                while d_curr <= d_max:
+                    rail_co = distance_to_co(d_curr, points, distances)
+                    pt = rail_co + offset
+                    if prev_pt is not None:
+                        survival_pos.append(prev_pt)
+                        survival_pos.append(pt)
+                        survival_colors.append(line_color)
+                        survival_colors.append(line_color)
+                    prev_pt = pt
+                    if d_curr == d_max:
+                        break
+                    d_curr = min(d_max, d_curr + d_step)
                 
         if survival_pos:
             batch_line = batch_for_shader(
