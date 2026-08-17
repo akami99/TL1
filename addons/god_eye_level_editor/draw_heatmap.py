@@ -336,10 +336,19 @@ def sync_distance_to_keyframe(obj):
     elif hasattr(action, "fcurves"):
         fcurves = [fc for fc in action.fcurves if fc.data_path == "location"]
 
-    k_type = 'EXTREME' if obj.get("stop_point") else 'KEYFRAME'
+    if obj.get("stop_point"):
+        k_type = 'EXTREME'
+    elif obj.get("look_target"):
+        k_type = 'JITTER'
+    else:
+        k_type = 'KEYFRAME'
+
     for fc in fcurves:
+        axis = fc.array_index
+        val = obj.location[axis] if 0 <= axis < 3 else 0.0
         for k in fc.keyframe_points:
-            k.co = (target_frame, k.co[1])
+            k.co = (target_frame, val)
+            k.interpolation = 'CONSTANT'
             k.handle_left_type = 'FREE'
             k.handle_right_type = 'FREE'
             k.type = k_type
@@ -384,10 +393,19 @@ def sync_keyframe_to_distance(obj):
             elif hasattr(action, "fcurves"):
                 fcurves = [fc for fc in action.fcurves if fc.data_path == "location"]
 
-            k_type = 'EXTREME' if obj.get("stop_point") else 'KEYFRAME'
+            if obj.get("stop_point"):
+                k_type = 'EXTREME'
+            elif obj.get("look_target"):
+                k_type = 'JITTER'
+            else:
+                k_type = 'KEYFRAME'
+
             for fc in fcurves:
+                axis = fc.array_index
+                val = obj.location[axis] if 0 <= axis < 3 else 0.0
                 for k in fc.keyframe_points:
-                    k.co = (frame, k.co[1])
+                    k.co = (frame, val)
+                    k.interpolation = 'CONSTANT'
                     k.type = k_type
                 fc.update()
                 
@@ -543,13 +561,13 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     points = _curve_cache["points"]
     distances = _curve_cache["distances"]
 
-    spawn_objs = [obj for obj in scene.objects if ("spawn" in obj and obj.get("spawn") != "PLAYER") or obj.get("stop_point")]
+    spawn_objs = [obj for obj in scene.objects if ("spawn" in obj and obj.get("spawn") != "PLAYER") or obj.get("stop_point") or obj.get("look_target")]
     area_objs = [obj for obj in scene.objects if obj.get("area")]
 
     # --- パターンA: キーフレーム位置と distance プロパティ、どちらが変化したかを個別に判定 ---
     timeline_changed_any = False
     if not _updating_godeye:
-        # スポーンオブジェクト（敵）および停止ポイントの同期 (1点キーフレーム)
+        # スポーンオブジェクト（敵）、停止ポイント、注視ターゲットの同期 (1点キーフレーム)
         for obj in spawn_objs:
             fcurve = get_fcurve_compat(obj, "location")
             if not fcurve or len(fcurve.keyframe_points) == 0:
@@ -567,12 +585,12 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
             prev_frame = _prev_keyframe_frames.get(obj.name)
             prev_dist = _prev_distances.get(obj.name)
 
-            frame_moved = prev_frame is not None and abs(curr_frame - prev_frame) > 0.05
+            frame_moved = prev_frame is not None and not math.isclose(curr_frame, prev_frame, abs_tol=0.05)
             dist_moved = prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4)
 
             if dist_moved and not frame_moved:
                 sync_distance_to_keyframe(obj)
-                _prev_keyframe_frames[obj.name] = int(curr_dist * 10) + 1
+                _prev_keyframe_frames[obj.name] = expected_frame
                 _prev_distances[obj.name] = curr_dist
                 timeline_changed_any = True
             else:
@@ -585,25 +603,22 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
         for obj in area_objs:
             fcurve = get_fcurve_compat(obj, "location")
             if not fcurve or len(fcurve.keyframe_points) < 2:
-                sync_area_distance_to_keyframe(obj)
                 continue
 
-            f0 = fcurve.keyframe_points[0].co[0]
-            f1 = fcurve.keyframe_points[1].co[0]
+            curr_f0 = fcurve.keyframe_points[0].co[0]
+            curr_f1 = fcurve.keyframe_points[1].co[0]
             curr_dist = obj.get("distance", 0.0)
-            end_dist = obj.get("end_distance", curr_dist + 30.0)
+            curr_end_dist = obj.get("end_distance", curr_dist + 10.0)
             expected_f0 = int(curr_dist * 10) + 1
-            expected_f1 = max(expected_f0 + 1, int(end_dist * 10) + 1)
+            expected_f1 = max(expected_f0 + 1, int(curr_end_dist * 10) + 1)
 
-            if abs(f0 - expected_f0) <= 0.05 and abs(f1 - expected_f1) <= 0.05:
-                _prev_keyframe_frames[obj.name] = (f0, f1)
-                _prev_distances[obj.name] = curr_dist
-                continue
-
-            prev_key = _prev_keyframe_frames.get(obj.name)
+            prev_frames = _prev_keyframe_frames.get(obj.name)
             prev_dist = _prev_distances.get(obj.name)
 
-            frame_moved = prev_key is not None and (abs(f0 - prev_key[0]) > 0.05 or abs(f1 - prev_key[1]) > 0.05)
+            frame_moved = prev_frames is not None and (
+                not math.isclose(curr_f0, prev_frames[0], abs_tol=0.05) or
+                not math.isclose(curr_f1, prev_frames[1], abs_tol=0.05)
+            )
             dist_moved = prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4)
 
             if dist_moved and not frame_moved:
@@ -630,7 +645,7 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
     if not _updating_godeye:
         _updating_godeye = True
         try:
-            active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj or obj.get("area") or obj.get("stop_point")]
+            active_objs = [obj for obj in bpy.context.selected_objects if "spawn" in obj or obj.get("area") or obj.get("stop_point") or obj.get("look_target")]
             for obj in active_objs:
                 curr_dist = obj.get("distance", 0.0)
                 prev_dist = _prev_distances.get(obj.name)
@@ -657,6 +672,19 @@ def godeye_depsgraph_update_handler(scene, depsgraph):
                     else:
                         _prev_locations[obj.name] = curr_loc
                         _prev_distances[obj.name] = curr_dist
+
+                # LOOK TARGET / ENEMY: 3D座標は自由配置、プロパティ変更時または3D移動時はキー同期
+                elif obj.get("look_target") or obj.get("spawn") == "ENEMY":
+                    curr_loc = tuple(obj.location)
+                    prev_loc = _prev_locations.get(obj.name)
+                    if prev_loc is not None and curr_loc != prev_loc:
+                        sync_distance_to_keyframe(obj)
+                        _prev_locations[obj.name] = curr_loc
+                    elif prev_dist is not None and not math.isclose(curr_dist, prev_dist, abs_tol=1e-4):
+                        sync_distance_to_keyframe(obj)
+                        _prev_distances[obj.name] = curr_dist
+                    _prev_locations[obj.name] = curr_loc
+                    _prev_distances[obj.name] = curr_dist
 
                 # AREA / STOP POINT: 3Dドラッグ移動時はレール上にスナップ
                 elif obj.get("area"):
@@ -722,8 +750,9 @@ def draw_heatmap_callback():
     show_survival = scene.godeye_show_survival
     show_fov = scene.godeye_show_fov
     show_areas = scene.godeye_show_areas
+    show_look_targets = getattr(scene, "godeye_show_look_targets", True)
     
-    if not show_heatmap and not show_survival and not show_fov and not show_areas:
+    if not show_heatmap and not show_survival and not show_fov and not show_areas and not show_look_targets:
         return
     
     # キャッシュからデータを取得
@@ -930,6 +959,48 @@ def draw_heatmap_callback():
             shader.bind()
             batch_gate.draw(shader)
 
+    # 5. 注視ターゲットおよびプレイヤー視線ライン描画
+    if show_look_targets:
+        look_objs = [obj for obj in scene.objects if obj.get("look_target")]
+        if look_objs:
+            look_line_pos = []
+            look_line_cols = []
+            guide_col = (0.2, 0.9, 0.4, 0.45)  # 薄いグリーン（レール注視点へのガイド線）
+            
+            # 各注視ターゲットから、レール上の注視開始点へのガイドライン
+            for lt in look_objs:
+                lt_dist = lt.get("distance", 0.0)
+                rail_p = distance_to_co(lt_dist, points, distances)
+                look_line_pos.extend([rail_p, lt.location])
+                look_line_cols.extend([guide_col, guide_col])
+
+            # アクティブな視線（プレイヤー現在位置 -> アクティブな注視ターゲット）
+            curr_rail = scene.godeye_rail_curve
+            curr_sim_dist = curr_rail.get("godeye_test_run_dist", 0.0) if curr_rail else 0.0
+            p_co = distance_to_co(curr_sim_dist, points, distances)
+            
+            active_target = None
+            for lt in sorted(look_objs, key=lambda o: o.get("distance", 0.0)):
+                lt_start = lt.get("distance", 0.0)
+                lt_duration = lt.get("duration_distance", 0.0)
+                lt_end = lt_start + lt_duration
+                if lt_duration <= 0.0:
+                    if abs(curr_sim_dist - lt_start) <= 0.5:
+                        active_target = lt
+                else:
+                    if lt_start <= curr_sim_dist <= lt_end:
+                        active_target = lt
+                    
+            if active_target:
+                active_col = (1.0, 0.9, 0.15, 0.95)  # 明るい黄色（アクティブ視線）
+                look_line_pos.extend([p_co, active_target.location])
+                look_line_cols.extend([active_col, active_col])
+
+            if look_line_pos:
+                batch_look = batch_for_shader(shader, 'LINES', {"pos": look_line_pos, "color": look_line_cols})
+                shader.bind()
+                batch_look.draw(shader)
+
     gpu.state.depth_test_set('LESS_EQUAL')
 
 def draw_dopesheet_heatmap_callback():
@@ -1086,6 +1157,32 @@ def draw_dopesheet_heatmap_callback():
             # 停止ポイントの下向き三角ピン（▼）
             add_down_pin(xs, y_bar - 1.0, pin_size + 1.0, stop_col)
 
+        # 2-3. 注視ターゲット (緑色の下向き三角ピン▼ & 継続区間ライン)
+        look_objs = [obj for obj in scene.objects if obj.get("look_target")]
+        look_col = (0.2, 0.9, 0.4, 0.95)
+        for l_obj in look_objs:
+            l_dist = l_obj.get("distance", 0.0)
+            l_duration = l_obj.get("duration_distance", 0.0)
+            f_look = int(l_dist * 10) + 1
+            xl, _ = view2d.view_to_region(f_look, 0, clip=False)
+
+            if l_duration > 0.0:
+                f_look_end = max(f_look + 1, int((l_dist + l_duration) * 10) + 1)
+                xl_end, _ = view2d.view_to_region(f_look_end, 0, clip=False)
+
+                # 区間バー (水平2重線)
+                for dy in (0, 1):
+                    line_pos.extend([
+                        (xl, y_bar + dy), (xl_end, y_bar + dy)
+                    ])
+                    line_colors.extend([look_col, look_col])
+
+                # 終了ピン
+                add_down_pin(xl_end, y_bar - 1.0, pin_size, look_col)
+
+            # 開始ピン
+            add_down_pin(xl, y_bar - 1.0, pin_size, look_col)
+
         # 描画実行
         try:
             shader = gpu.shader.from_builtin('FLAT_COLOR')
@@ -1129,7 +1226,26 @@ def update_simulation(scene, target_dist=None):
     if players:
         p_co = distance_to_co(current_dist, points, distances)
         
-        if scene.godeye_lock_player_rotation:
+        # 注視ターゲットの探索
+        look_targets = sorted([obj for obj in scene.objects if obj.get("look_target")], key=lambda o: o.get("distance", 0.0))
+        active_target = None
+        for lt in look_targets:
+            lt_start = lt.get("distance", 0.0)
+            lt_duration = lt.get("duration_distance", 0.0)
+            lt_end = lt_start + lt_duration
+            if lt_duration <= 0.0:
+                if abs(current_dist - lt_start) <= 0.5:
+                    active_target = lt
+            else:
+                if lt_start <= current_dist <= lt_end:
+                    active_target = lt
+
+        if active_target is not None:
+            direction = (active_target.location - p_co).normalized()
+            # -Y方向をターゲットに向ける回転
+            rot_diff = mathutils.Vector((0, -1, 0)).rotation_difference(direction)
+            rot_euler = rot_diff.to_euler()
+        elif scene.godeye_lock_player_rotation:
             rot_euler = scene.godeye_locked_player_rotation_euler
         else:
             # 接線

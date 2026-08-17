@@ -95,7 +95,14 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 else:
                     print(f"Prototype for {spawn_type} not found, fallback to empty.")
 
-            # 2. spawn属性がなく、file_name属性がある場合（モデル読み込み）
+            # 2. look_target属性がある場合（注視ターゲットEmpty作成）
+            elif "look_target" in obj_data:
+                new_obj = bpy.data.objects.new(name=obj_name, object_data=None)
+                new_obj.empty_display_type = 'SPHERE'
+                new_obj.empty_display_size = 0.6
+                context.collection.objects.link(new_obj)
+
+            # 3. file_name属性がある場合（モデル読み込み）
             elif "file_name" in obj_data and obj_data["file_name"]:
                 file_rel_path = obj_data["file_name"]
                 
@@ -212,6 +219,11 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 if "time_limit" in obj_data:
                     new_obj["time_limit"] = obj_data["time_limit"]
 
+            if "look_target" in obj_data:
+                new_obj["look_target"] = True
+                new_obj["duration_distance"] = obj_data.get("duration_distance", 0.0)
+                new_obj["blend_distance"] = obj_data.get("blend_distance", 3.0)
+
             if "collider" in obj_data:
                 coll_data = obj_data["collider"]
                 new_obj["collider"] = coll_data.get("type", "BOX")
@@ -267,6 +279,25 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
                 stop_obj["distance"] = s_dist
                 stop_obj["time_limit"] = s_time
 
+        has_look_obj = any(obj.get("look_target") for obj in context.scene.objects)
+        if not has_look_obj and "look_targets" in data:
+            for l_data in data["look_targets"]:
+                l_name = l_data.get("name", "LookTarget")
+                l_dist = l_data.get("distance", 0.0)
+                l_duration = l_data.get("duration_distance", 0.0)
+                l_blend = l_data.get("blend_distance", 3.0)
+                l_pos = l_data.get("position", [0.0, 0.0, 0.0])
+
+                look_obj = bpy.data.objects.new(name=l_name, object_data=None)
+                look_obj.empty_display_type = 'SPHERE'
+                look_obj.empty_display_size = 0.6
+                context.collection.objects.link(look_obj)
+                look_obj.location = (l_pos[0], l_pos[1], l_pos[2])
+                look_obj["look_target"] = True
+                look_obj["distance"] = l_dist
+                look_obj["duration_distance"] = l_duration
+                look_obj["blend_distance"] = l_blend
+
         # インポート完了後にキャッシュを強制再構築し、バウンディングボックスの評価を更新
         if context.scene.godeye_rail_curve:
             from .draw_heatmap import update_curve_cache
@@ -291,7 +322,7 @@ class MYADDON_OT_import_scene(bpy.types.Operator, ImportHelper):
         # インポート完了時のキーフレーム同期
         from .draw_heatmap import sync_distance_to_keyframe, sync_area_distance_to_keyframe
         for obj in context.scene.objects:
-            if "spawn" in obj or obj.get("stop_point"):
+            if "spawn" in obj or obj.get("stop_point") or obj.get("look_target"):
                 sync_distance_to_keyframe(obj)
             elif obj.get("area"):
                 sync_area_distance_to_keyframe(obj)

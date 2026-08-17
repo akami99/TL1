@@ -157,6 +157,14 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
             if "time_limit" in object:
                 json_object["time_limit"] = object["time_limit"]
 
+        # カスタムプロパティ'look_target'
+        if "look_target" in object:
+            json_object["look_target"] = object["look_target"]
+            if "duration_distance" in object:
+                json_object["duration_distance"] = object["duration_distance"]
+            if "blend_distance" in object:
+                json_object["blend_distance"] = object["blend_distance"]
+
         # カーブデータのエクスポート
         if object.type == 'CURVE':
             curve_data = object.data
@@ -251,6 +259,18 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
                 "time_limit": obj.get("time_limit", 0.0),
             }
             for obj in bpy.context.scene.objects if obj.get("stop_point")
+        ]
+
+        # 注視ターゲットを出力
+        json_object_root["look_targets"] = [
+            {
+                "name": obj.name,
+                "distance": obj.get("distance", 0.0),
+                "duration_distance": obj.get("duration_distance", 0.0),
+                "blend_distance": obj.get("blend_distance", 3.0),
+                "position": [obj.location.x, obj.location.y, obj.location.z],
+            }
+            for obj in bpy.context.scene.objects if obj.get("look_target")
         ]
 
         # オブジェクトをJSON文字列にエンコード (改行・インデント付き)

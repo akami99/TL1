@@ -74,6 +74,7 @@ classes = (
     panel_godeye.OBJECT_PT_godeye_main,
     panel_godeye.MYADDON_OT_create_area,
     panel_godeye.MYADDON_OT_create_stop_point,
+    panel_godeye.MYADDON_OT_create_look_target,
     panel_godeye.MYADDON_OT_delete_area,
     panel_godeye.MYADDON_OT_select_object,
     panel_godeye.MYADDON_OT_create_rail,
@@ -186,6 +187,10 @@ def register():
         name="ドープシート戦闘エリア表示",
         default=True
     )
+    bpy.types.Scene.godeye_show_look_targets = bpy.props.BoolProperty(
+        name="注視ターゲット・視線表示",
+        default=True
+    )
 
     bpy.types.Scene.godeye_enable_autosave = bpy.props.BoolProperty(
         name="自動エクスポート有効化",
@@ -255,6 +260,7 @@ def unregister():
     del bpy.types.Scene.godeye_show_fov
     del bpy.types.Scene.godeye_show_areas
     del bpy.types.Scene.godeye_show_dopesheet_areas
+    del bpy.types.Scene.godeye_show_look_targets
     del bpy.types.Scene.godeye_enable_autosave
     del bpy.types.Scene.godeye_autosave_delay
     del bpy.types.Scene.godeye_fov_angle

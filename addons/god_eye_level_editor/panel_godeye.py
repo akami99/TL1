@@ -36,8 +36,9 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
 
         # 新規作成ボタン
         row_create = box_editor.row(align=True)
-        row_create.operator("myaddon.myaddon_ot_spawn_create_player_symbol", text="プレイヤー追加", icon='OUTLINER_OB_LIGHT')
-        row_create.operator("myaddon.myaddon_ot_spawn_create_enemy_symbol", text="エネミー追加", icon='OUTLINER_OB_MESH')
+        row_create.operator("myaddon.myaddon_ot_spawn_create_player_symbol", text="プレイヤー", icon='OUTLINER_OB_LIGHT')
+        row_create.operator("myaddon.myaddon_ot_spawn_create_enemy_symbol", text="エネミー", icon='OUTLINER_OB_MESH')
+        row_create.operator("myaddon.myaddon_ot_create_look_target", text="注視ターゲット", icon='HIDE_OFF')
         box_editor.separator()
 
         active_obj = context.active_object
@@ -75,12 +76,40 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
                 box_editor.prop(active_obj, '["collider_size"]', text="サイズ")
             else:
                 box_editor.operator("myaddon.myaddon_ot_add_collider", text="コライダーを追加", icon='ADD')
+
+        elif active_obj and active_obj.get("look_target"):
+            box_editor.label(text=f"選択中: {active_obj.name} (注視ターゲット)", icon='HIDE_OFF')
+            if "distance" in active_obj:
+                try:
+                    ui_api = active_obj.id_properties_ui("distance")
+                    ui_api.update(min=0.0, max=total_dist, description="注視を開始する距離（m）")
+                except Exception:
+                    pass
+                box_editor.prop(active_obj, '["distance"]', text="注視開始位置 (m)", slider=True)
+            
+            if "duration_distance" in active_obj:
+                box_editor.prop(active_obj, '["duration_distance"]', text="注視継続距離 (m)")
+            else:
+                active_obj["duration_distance"] = 0.0
+                box_editor.prop(active_obj, '["duration_distance"]', text="注視継続距離 (m)")
+
+            dur = active_obj.get("duration_distance", 0.0)
+            if dur <= 0.0:
+                box_editor.label(text="※0m: その地点/停止中のみ注視", icon='INFO')
+            else:
+                s_d = active_obj.get("distance", 0.0)
+                box_editor.label(text=f"※{s_d:.1f}m ~ {s_d + dur:.1f}m の間注視", icon='INFO')
+
+            if "blend_distance" in active_obj:
+                box_editor.prop(active_obj, '["blend_distance"]', text="補間距離 (m)")
+            box_editor.separator()
+            box_editor.operator("myaddon.myaddon_ot_delete_area", text="注視ターゲットを削除", icon='TRASH')
         else:
-            box_editor.label(text="（調整するスポーンを選択してください）", icon='INFO')
+            box_editor.label(text="（調整するオブジェクトを選択してください）", icon='INFO')
 
         # --- ③ エリア・停止設定 (Combat Areas & Stop Points) ---
         box_areas = layout.box()
-        box_areas.label(text="③ エリア・停止設定 (Combat Areas)", icon='SELECT_SUBTRACT')
+        box_areas.label(text="③ エリア・停止・注視設定", icon='SELECT_SUBTRACT')
 
         # 新規作成ボタン
         row_create = box_areas.row(align=True)
@@ -139,15 +168,16 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
 
             box_areas.separator()
             box_areas.operator("myaddon.myaddon_ot_delete_area", text="停止ポイントを削除", icon='TRASH')
-        else:
+        elif not (active_obj and active_obj.get("look_target")):
             box_areas.label(text="（調整するエリア/停止ポイントを選択）", icon='INFO')
 
         # シーン内の一覧表示
         area_objs = [obj for obj in scene.objects if obj.get("area")]
         stop_objs = [obj for obj in scene.objects if obj.get("stop_point")]
-        if area_objs or stop_objs:
+        look_objs = [obj for obj in scene.objects if obj.get("look_target")]
+        if area_objs or stop_objs or look_objs:
             box_areas.separator()
-            box_areas.label(text="シーン内のエリア・停止一覧:")
+            box_areas.label(text="シーン内のエリア・停止・注視一覧:")
             col_list = box_areas.column(align=True)
             for a_obj in sorted(area_objs, key=lambda o: o.get("distance", 0.0)):
                 s_dist = a_obj.get("distance", 0.0)
@@ -162,6 +192,12 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
                 row_item.label(text=f"{s_dist:.1f}m (Stop)", icon='PAUSE')
                 op_sel = row_item.operator("myaddon.myaddon_ot_select_object", text=s_obj.name)
                 op_sel.target_object_name = s_obj.name
+            for l_obj in sorted(look_objs, key=lambda o: o.get("distance", 0.0)):
+                l_dist = l_obj.get("distance", 0.0)
+                row_item = col_list.row(align=True)
+                row_item.label(text=f"{l_dist:.1f}m (Look)", icon='HIDE_OFF')
+                op_sel = row_item.operator("myaddon.myaddon_ot_select_object", text=l_obj.name)
+                op_sel.target_object_name = l_obj.name
 
         # --- ④ 視覚効果 (Visualization) ---
         box_vis = layout.box()
@@ -172,6 +208,7 @@ class OBJECT_PT_godeye_main(bpy.types.Panel):
         box_vis.prop(scene, "godeye_show_fov", text="プレイヤー視野（FOV）を表示")
         box_vis.prop(scene, "godeye_show_areas", text="レールの戦闘エリアを表示")
         box_vis.prop(scene, "godeye_show_dopesheet_areas", text="ドープシートの戦闘エリアを表示")
+        box_vis.prop(scene, "godeye_show_look_targets", text="注視ターゲット・視線を表示")
 
         # --- ⑤ テスト走行シミュレータ (Simulation) ---
         box_sim = layout.box()
@@ -307,15 +344,62 @@ class MYADDON_OT_create_stop_point(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class MYADDON_OT_create_look_target(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_create_look_target"
+    bl_label = "注視ターゲットの作成"
+    bl_description = "プレイヤーがカメラを向ける注視ターゲット（Emptyオブジェクト）を作成します"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        scene = context.scene
+        rail_obj = scene.godeye_rail_curve
+        current_dist = 0.0
+        if rail_obj and "godeye_test_run_dist" in rail_obj:
+            current_dist = rail_obj["godeye_test_run_dist"]
+
+        from .draw_heatmap import sync_distance_to_keyframe
+
+        loc = context.scene.cursor.location
+
+        existing = [obj for obj in scene.objects if obj.get("look_target")]
+        target_name = f"LookTarget_{len(existing) + 1}"
+
+        new_obj = bpy.data.objects.new(name=target_name, object_data=None)
+        new_obj.empty_display_type = 'SPHERE'
+        new_obj.empty_display_size = 0.6
+        context.collection.objects.link(new_obj)
+        new_obj.location = loc
+
+        # プロパティ設定
+        new_obj["look_target"] = True
+        new_obj["distance"] = current_dist
+        new_obj["duration_distance"] = 0.0
+        new_obj["blend_distance"] = 3.0
+
+        # キーフレーム初期設定
+        sync_distance_to_keyframe(new_obj)
+
+        bpy.ops.object.select_all(action='DESELECT')
+        new_obj.select_set(True)
+        context.view_layer.objects.active = new_obj
+
+        for area in context.screen.areas:
+            if area.type in ('VIEW_3D', 'DOPESHEET_EDITOR'):
+                area.tag_redraw()
+
+        self.report({'INFO'}, f"注視ターゲット作成: {target_name}")
+        return {"FINISHED"}
+
+
 class MYADDON_OT_delete_area(bpy.types.Operator):
     bl_idname = "myaddon.myaddon_ot_delete_area"
-    bl_label = "エリア/停止ポイントを削除"
-    bl_description = "選択中のエリアまたは停止ポイントオブジェクトを削除します"
+    bl_label = "オブジェクトを削除"
+    bl_description = "選択中のエリア、停止ポイント、または注視ターゲットオブジェクトを削除します"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         active_obj = context.active_object
-        if active_obj and (active_obj.get("area") or active_obj.get("stop_point")):
+        if active_obj and (active_obj.get("area") or active_obj.get("stop_point") or active_obj.get("look_target")):
             name = active_obj.name
             bpy.data.objects.remove(active_obj, do_unlink=True)
             for area in context.screen.areas:
